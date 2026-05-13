@@ -1,7 +1,28 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 package-down
-package-down.exe
-package-down.exe~
+
+# Test binary and coverage output
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Downloaded package artifacts
 *.zip
 *.rpm
 *.deb
+
+# Dependency and workspace files
 node_modules/
+vendor/
+go.work
+go.work.sum
+
+# Environment files
+.env
