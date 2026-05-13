@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Package Proxy</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Package Proxy 首页">
+        <span class="brand-mark">P</span>
+        <span>Package Proxy</span>
+      </a>
+      <nav class="nav-links" aria-label="页面导航">
+        <a href="#download">下载</a>
+        <a href="#batch">批量</a>
+        <a href="#config">仓库</a>
+      </nav>
+      <button class="icon-button" type="button" id="themeToggle" aria-label="切换主题" title="切换主题">
+        <span aria-hidden="true">◐</span>
+      </button>
+    </header>
+
+    <main class="shell" id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow">Package streaming proxy</p>
+        <h1 id="hero-title">系统包即时下载</h1>
+        <p class="summary">输入包名或 RPM/DEB 地址，服务端识别目标系统仓库，连同依赖一起实时压缩成 ZIP，浏览器立即开始接收下载流。</p>
+
+        <div class="detect-strip" aria-live="polite">
+          <span class="detect-label">操作系统识别</span>
+          <strong id="detectedOs">识别中...</strong>
+          <span id="targetHint">目标仓库：AlmaLinux 9 / x86_64 / rpm</span>
+        </div>
+
+        <form class="quick-form" action="/download" method="post" id="download">
+          <input type="hidden" name="clientOs" class="client-os">
+          <input type="hidden" name="clientArch" class="client-arch">
+
+          <input type="hidden" name="includeDeps" value="true" class="include-deps-value">
+
+          <label class="sr-only" for="packageName">包名或 RPM/DEB URL</label>
+          <input
+            id="packageName"
+            name="packageName"
+            placeholder="输入包名，例如 bash 或 curl"
+            autocomplete="off"
+            required
+          >
+
+          <label class="sr-only" for="quickOsProfile">目标操作系统</label>
+          <select id="quickOsProfile" name="osProfile" class="os-profile-select" aria-label="目标操作系统"></select>
+
+          <label class="sr-only" for="quickArch">目标架构</label>
+          <select id="quickArch" name="arch" class="arch-select" aria-label="目标架构"></select>
+
+          <button class="primary-button" type="submit">
+            <span class="button-icon" aria-hidden="true">↓</span>
+            下载 ZIP
+          </button>
+        </form>
+
+        <div class="badges" aria-label="下载特性">
+          <span>⚡ 即时下载</span>
+          <span>🔄 流式传输</span>
+          <span>💾 无需等待</span>
+          <span>🧩 依赖打包</span>
+        </div>
+      </section>
+
+      <section class="feature-grid" aria-label="功能亮点">
+        <article class="feature">
+          <span class="feature-icon" aria-hidden="true">↯</span>
+          <h2>实时压缩</h2>
+          <p>远端包文件流进入服务端后直接写入 ZIP 响应，不需要先等待整包落盘。</p>
+        </article>
+        <article class="feature">
+          <span class="feature-icon" aria-hidden="true">⌁</span>
+          <h2>系统识别</h2>
+          <p>自动识别当前浏览器系统和 CPU 架构，并为目标仓库给出默认选择。</p>
+        </article>
+        <article class="feature">
+          <span class="feature-icon" aria-hidden="true">✓</span>
+          <h2>依赖解析</h2>
+          <p>RPM 读取 requires/provides，Ubuntu 读取 Depends/Pre-Depends，递归补齐依赖包。</p>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <section class="panel" aria-labelledby="batch-title" id="batch">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Batch mode</p>
+              <h2 id="batch-title">批量下载</h2>
+            </div>
+            <a class="text-link" href="#download">返回单包输入</a>
+          </div>
+
+          <form class="download-form" action="/download" method="post">
+            <input type="hidden" name="clientOs" class="client-os">
+            <input type="hidden" name="clientArch" class="client-arch">
+            <input type="hidden" name="includeDeps" value="true" class="include-deps-value">
+
+            <div class="form-grid">
+              <label>
+                目标操作系统
+                <select name="osProfile" class="os-profile-select"></select>
+              </label>
+              <label>
+                目标架构
+                <select name="arch" class="arch-select"></select>
+              </label>
+            </div>
+
+            <label class="option-row">
+              <input type="checkbox" class="include-deps-toggle" checked>
+              <span>同时下载依赖包</span>
+            </label>
+
+            <label for="packages">包名或 RPM/DEB URL</label>
+            <textarea
+              id="packages"
+              name="packages"
+              rows="8"
+              placeholder="bash&#10;curl&#10;https://example.com/path/demo.rpm"
+              autocomplete="off"
+              required
+            ></textarea>
+
+            <div class="actions">
+              <button class="primary-button" type="submit">
+                <span class="button-icon" aria-hidden="true">↓</span>
+                生成并下载 ZIP
+              </button>
+              <p class="hint">支持空格、逗号、分号或换行分隔；首次解析仓库和依赖可能需要几十秒，结果会写入 ZIP 内的 manifest.json。</p>
+            </div>
+          </form>
+        </section>
+
+        <aside class="panel side-panel" aria-labelledby="config-title" id="config">
+          <div class="panel-header compact">
+            <div>
+              <p class="panel-kicker">Repository</p>
+              <h2 id="config-title">仓库配置</h2>
+            </div>
+            <button class="ghost-button" type="button" id="loadConfig">刷新</button>
+          </div>
+          <p class="side-copy">当前服务会按目标操作系统和架构选择 RPM 或 DEB 仓库。直接 URL 下载可通过环境变量关闭。</p>
+          <pre class="config-output" id="configOutput">点击刷新查看当前仓库。</pre>
+        </aside>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Package Proxy</span>
+      <a href="#top">回到顶部</a>
+    </footer>
+
+    <script>
+      const root = document.documentElement;
+      const themeButton = document.querySelector("#themeToggle");
+      const loadConfigButton = document.querySelector("#loadConfig");
+      const output = document.querySelector("#configOutput");
+      const detectedOs = document.querySelector("#detectedOs");
+      const targetHint = document.querySelector("#targetHint");
+      const osProfileSelects = [...document.querySelectorAll(".os-profile-select")];
+      const archSelects = [...document.querySelectorAll(".arch-select")];
+      const clientOsInputs = [...document.querySelectorAll(".client-os")];
+      const clientArchInputs = [...document.querySelectorAll(".client-arch")];
+      const includeDepsToggles = [...document.querySelectorAll(".include-deps-toggle")];
+      const includeDepsValues = [...document.querySelectorAll(".include-deps-value")];
+      const savedTheme = localStorage.getItem("theme");
+      let profiles = [];
+
+      if (savedTheme) {
+        root.dataset.theme = savedTheme;
+      }
+
+      themeButton.addEventListener("click", () => {
+        const next = root.dataset.theme === "dark" ? "light" : "dark";
+        root.dataset.theme = next;
+        localStorage.setItem("theme", next);
+      });
+
+      loadConfigButton.addEventListener("click", () => loadConfig(true));
+
+      includeDepsToggles.forEach((input) => {
+        input.addEventListener("change", () => {
+          includeDepsValues.forEach((field) => {
+            field.value = input.checked ? "true" : "false";
+          });
+          includeDepsToggles.forEach((item) => {
+            item.checked = input.checked;
+          });
+        });
+      });
+
+      osProfileSelects.forEach((select) => {
+        select.addEventListener("change", () => {
+          syncSelects(osProfileSelects, select.value);
+          renderArchOptions();
+          updateTargetHint();
+        });
+      });
+
+      archSelects.forEach((select) => {
+        select.addEventListener("change", () => syncSelects(archSelects, select.value));
+        select.addEventListener("change", updateTargetHint);
+      });
+
+      init();
+
+      async function init() {
+        const localOs = await detectLocalSystem();
+        setClientDetection(localOs);
+        await loadConfig(false);
+        applyDetectedArch(localOs.arch);
+        updateTargetHint();
+      }
+
+      async function loadConfig(showResult) {
+        loadConfigButton.disabled = true;
+        if (showResult) {
+          output.textContent = "读取中...";
+        }
+
+        try {
+          const params = new URLSearchParams({
+            osProfile: osProfileSelects[0]?.value || "",
+            arch: archSelects[0]?.value || ""
+          });
+          const response = await fetch(`/api/config?${params.toString()}`);
+          const config = await response.json();
+          profiles = config.profiles || [];
+          renderProfiles(config.selected);
+
+          if (showResult) {
+            output.textContent = JSON.stringify(config, null, 2);
+          }
+        } catch (error) {
+          output.textContent = "读取配置失败：" + error.message;
+        } finally {
+          loadConfigButton.disabled = false;
+        }
+      }
+
+      function renderProfiles(selected) {
+        if (!profiles.length) {
+          return;
+        }
+
+        for (const select of osProfileSelects) {
+          const current = select.value || selected.osProfile;
+          select.innerHTML = profiles
+            .map((profile) => `<option value="${profile.id}">${profile.label} · ${profile.packageType}</option>`)
+            .join("");
+          select.value = profiles.some((profile) => profile.id === current) ? current : selected.osProfile;
+        }
+
+        syncSelects(osProfileSelects, osProfileSelects[0].value);
+        renderArchOptions(selected.arch);
+      }
+
+      function renderArchOptions(preferred) {
+        const profile = profiles.find((item) => item.id === osProfileSelects[0]?.value);
+        const arches = profile?.arches?.length ? profile.arches : ["x86_64", "aarch64"];
+        const current = preferred || archSelects[0]?.value || profile?.defaultArch || arches[0];
+        const value = arches.includes(current) ? current : profile?.defaultArch || arches[0];
+
+        for (const select of archSelects) {
+          select.innerHTML = arches
+            .map((arch) => `<option value="${arch}">${arch}</option>`)
+            .join("");
+          select.value = value;
+        }
+      }
+
+      async function detectLocalSystem() {
+        const nav = navigator;
+        const ua = nav.userAgent || "";
+        const platform = nav.userAgentData?.platform || nav.platform || "";
+        let arch = "";
+
+        if (nav.userAgentData?.getHighEntropyValues) {
+          try {
+            const data = await nav.userAgentData.getHighEntropyValues(["architecture", "bitness", "platform"]);
+            arch = normalizeClientArch(`${data.architecture || ""} ${data.bitness || ""}`);
+          } catch (_error) {
+            arch = "";
+          }
+        }
+
+        return {
+          os: detectOsName(`${platform} ${ua}`),
+          arch: arch || normalizeClientArch(`${platform} ${ua}`)
+        };
+      }
+
+      function setClientDetection(info) {
+        const osText = info.os || "未知系统";
+        const archText = info.arch || "unknown";
+        detectedOs.textContent = `${osText} / ${archText}`;
+
+        for (const input of clientOsInputs) {
+          input.value = osText;
+        }
+
+        for (const input of clientArchInputs) {
+          input.value = archText;
+        }
+      }
+
+      function applyDetectedArch(clientArch) {
+        const profile = profiles.find((item) => item.id === osProfileSelects[0]?.value);
+        const arches = profile?.arches || [];
+        const targetArch = clientArch === "arm64"
+          ? (arches.includes("arm64") ? "arm64" : "aarch64")
+          : (arches.includes("amd64") ? "amd64" : "x86_64");
+        syncSelects(archSelects, targetArch);
+      }
+
+      function updateTargetHint() {
+        const profile = profiles.find((item) => item.id === osProfileSelects[0]?.value);
+        const label = profile?.label || osProfileSelects[0]?.value || "未选择";
+        const arch = archSelects[0]?.value || "x86_64";
+        const type = profile?.packageType || "rpm";
+        targetHint.textContent = `目标仓库：${label} / ${arch} / ${type}`;
+      }
+
+      function syncSelects(selects, value) {
+        for (const select of selects) {
+          select.value = value;
+        }
+      }
+
+      function detectOsName(value) {
+        const text = value.toLowerCase();
+
+        if (text.includes("android")) return "Android";
+        if (/iphone|ipad|ipod/.test(text)) return "iOS";
+        if (text.includes("win")) return "Windows";
+        if (text.includes("mac")) return "macOS";
+        if (text.includes("linux")) return "Linux";
+        return "未知系统";
+      }
+
+      function normalizeClientArch(value) {
+        const text = String(value || "").toLowerCase();
+
+        if (/arm64|aarch64/.test(text)) return "arm64";
+        if (/x86_64|x64|amd64|win64|wow64|64/.test(text)) return "x64";
+        if (/i686|i386|x86/.test(text)) return "x86";
+        return "unknown";
+      }
+    </script>
+  </body>
+</html>

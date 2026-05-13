@@ -1,0 +1,7 @@
+package-down
+package-down.exe
+package-down.exe~
+*.zip
+*.rpm
+*.deb
+node_modules/
