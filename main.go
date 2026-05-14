@@ -371,10 +371,12 @@ func preloadConfiguredRepositories(ctx context.Context) error {
 	preloadCtx, cancel := context.WithTimeout(ctx, config.PreloadTimeout)
 	defer cancel()
 
-	log.Printf("preloading repositories before service start: mode=%s targets=%d", config.PreloadMode, len(contexts))
-	for _, dctx := range contexts {
+	log.Printf("preloading repositories before service start: mode=%s targets=%d timeout=%s", config.PreloadMode, len(contexts), config.PreloadTimeout)
+	for targetIndex, dctx := range contexts {
 		startedAt := time.Now()
-		index, errors := loadCombinedIndex(preloadCtx, dctx)
+		log.Printf("preload target %d/%d: %s %s %s repos=%d", targetIndex+1, len(contexts), dctx.Profile.Label, dctx.Arch, dctx.Profile.PackageType, len(dctx.RepoURLs))
+
+		index, errors := loadCombinedIndexWithProgress(preloadCtx, dctx)
 		for _, item := range errors {
 			log.Printf("preload warning: %s %s %s: %s", dctx.Profile.Label, dctx.Arch, item.Repo, item.Message)
 		}
@@ -388,6 +390,29 @@ func preloadConfiguredRepositories(ctx context.Context) error {
 
 	log.Println("repository preload completed; starting web service")
 	return nil
+}
+
+func loadCombinedIndexWithProgress(ctx context.Context, dctx downloadContext) (packageIndex, []manifestErr) {
+	combined := newPackageIndex()
+	errors := []manifestErr{}
+	total := len(dctx.RepoURLs)
+
+	for index, repo := range dctx.RepoURLs {
+		startedAt := time.Now()
+		log.Printf("preload repo %d/%d start: %s %s", index+1, total, repo.Name, repo.URL)
+
+		repoIndex, err := loadRepoIndex(ctx, dctx.Profile.PackageType, repo)
+		if err != nil {
+			log.Printf("preload repo %d/%d failed after %s: %s %s", index+1, total, time.Since(startedAt).Round(time.Second), repo.Name, err)
+			errors = append(errors, manifestErr{Repo: repo.URL, Message: err.Error()})
+			continue
+		}
+
+		mergeIndex(&combined, repoIndex)
+		log.Printf("preload repo %d/%d done: %s packages=%d duration=%s", index+1, total, repo.Name, len(repoIndex.ByName), time.Since(startedAt).Round(time.Second))
+	}
+
+	return combined, errors
 }
 
 func preloadDownloadContexts() []downloadContext {

@@ -105,6 +105,14 @@ sudo nohup ./package-down > package-down.log 2>&1 &
 
 echo "Package Proxy 已启动: http://localhost:3000"
 echo "日志文件: ${APP_DIR}/package-down.log"
+echo "查看加载进度: tail -f ${APP_DIR}/package-down.log"
+```
+
+调试时也可以前台启动，直接查看仓库加载进度：
+
+```bash
+cd /opt/package-down
+./package-down
 ```
 
 Windows PowerShell 下载并启动：
