@@ -71,6 +71,59 @@ git push origin v0.1.0
 
 也可以在 GitHub Actions 页面手动运行 `Release` workflow，并填写 tag。
 
+## 快速部署
+
+Linux 会自动识别 `x86_64` / `arm64` 架构，下载最新 Release、解压、授权并后台启动：
+
+```bash
+set -e
+
+APP_DIR=/opt/package-down
+REPO=senhao-xu/package-down
+ARCH=$(uname -m)
+
+case "$ARCH" in
+  x86_64|amd64)
+    ASSET=package-down-linux-x86_64.tar.gz
+    ;;
+  aarch64|arm64)
+    ASSET=package-down-linux-arm64.tar.gz
+    ;;
+  *)
+    echo "不支持的架构: $ARCH"
+    exit 1
+    ;;
+esac
+
+sudo mkdir -p "$APP_DIR"
+cd "$APP_DIR"
+
+sudo curl -fL -o package-down.tar.gz "https://github.com/${REPO}/releases/latest/download/${ASSET}"
+sudo tar -xzf package-down.tar.gz
+sudo chmod +x package-down
+sudo nohup ./package-down > package-down.log 2>&1 &
+
+echo "Package Proxy 已启动: http://localhost:3000"
+echo "日志文件: ${APP_DIR}/package-down.log"
+```
+
+Windows PowerShell 下载并启动：
+
+```powershell
+$AppDir = "C:\package-down"
+$Asset = "package-down-windows-x86_64.zip"
+$Url = "https://github.com/senhao-xu/package-down/releases/latest/download/$Asset"
+
+New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
+Set-Location $AppDir
+
+Invoke-WebRequest -Uri $Url -OutFile $Asset
+Expand-Archive -Force $Asset .
+Start-Process -FilePath ".\package-down.exe"
+
+Write-Host "Package Proxy 已启动: http://localhost:3000"
+```
+
 ## 配置
 
 可通过环境变量调整：
