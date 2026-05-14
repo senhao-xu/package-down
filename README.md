@@ -145,7 +145,10 @@ MAX_PACKAGES=50
 MAX_RESOLVED_PACKAGES=300
 CACHE_TTL_MS=1800000
 REQUEST_TIMEOUT_MS=120000
-PRELOAD_REPOS=default
+PRELOAD_REPOS=none
+PRELOAD_BLOCKING=false
+PRELOAD_DELAY_MS=2000
+PRELOAD_REPO_PAUSE_MS=500
 PRELOAD_TIMEOUT_MS=600000
 ALLOW_DIRECT_URLS=true
 ```
@@ -158,11 +161,16 @@ REPO_URLS=https://repo.example.com/os/{arch}/BaseOS/,https://repo.example.com/os
 
 默认端口是 `3000`，默认目标系统是 `AlmaLinux 9 / x86_64`。
 
-启动时会先预加载仓库元数据，加载完成后才启动 Web 服务，避免第一次下载时浏览器长时间无响应：
+默认不在启动时预加载仓库元数据，服务会先轻量启动，下载请求会先返回 ZIP 流，再按需解析仓库。这样启动占用最低，也不会出现浏览器一直没有响应的感觉。
 
-- `PRELOAD_REPOS=default`：默认值，只预加载默认系统和默认架构。
-- `PRELOAD_REPOS=all`：预加载所有内置系统和架构，启动更慢、占用内存更多。
-- `PRELOAD_REPOS=none`：关闭启动预加载，恢复首次下载时按需加载。
+如需提前预热仓库，可打开后台预热；页面右侧“仓库预热”会显示当前进度，日志里也会输出每个仓库的加载进度：
+
+- `PRELOAD_REPOS=none`：默认值，不在启动时预加载，首次下载时按需加载。
+- `PRELOAD_REPOS=default`：后台预热默认系统和默认架构；服务会立即启动。
+- `PRELOAD_REPOS=all`：后台预热所有内置系统和架构，占用内存更多，不建议小机器使用。
+- `PRELOAD_BLOCKING=true`：恢复旧行为，仓库预热完成后才启动 Web 服务。
+- `PRELOAD_DELAY_MS=2000`：后台预热延迟启动时间，默认 2 秒。
+- `PRELOAD_REPO_PAUSE_MS=500`：每个仓库预热之间的暂停时间，降低启动后资源尖峰。
 - `PRELOAD_TIMEOUT_MS=600000`：预加载总超时时间，默认 10 分钟。
 
 ## 依赖下载说明

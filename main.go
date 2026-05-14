@@ -59,6 +59,9 @@ type appConfig struct {
 	MaxResolved      int
 	RequestTimeout   time.Duration
 	PreloadMode      string
+	PreloadBlocking  bool
+	PreloadDelay     time.Duration
+	PreloadRepoPause time.Duration
 	PreloadTimeout   time.Duration
 	AllowDirectURL   bool
 }
@@ -166,6 +169,29 @@ type remoteFile struct {
 type repoCacheEntry struct {
 	LoadedAt time.Time
 	Index    packageIndex
+}
+
+type repoLoadCall struct {
+	Done  chan struct{}
+	Index packageIndex
+	Err   error
+}
+
+type preloadSnapshot struct {
+	Mode          string `json:"mode"`
+	Blocking      bool   `json:"blocking"`
+	Status        string `json:"status"`
+	Message       string `json:"message"`
+	TargetsTotal  int    `json:"targetsTotal"`
+	TargetsDone   int    `json:"targetsDone"`
+	ReposTotal    int    `json:"reposTotal"`
+	ReposDone     int    `json:"reposDone"`
+	Packages      int    `json:"packages"`
+	CurrentTarget string `json:"currentTarget"`
+	CurrentRepo   string `json:"currentRepo"`
+	StartedAt     string `json:"startedAt,omitempty"`
+	FinishedAt    string `json:"finishedAt,omitempty"`
+	LastError     string `json:"lastError,omitempty"`
 }
 
 var (
@@ -289,7 +315,10 @@ var (
 	}
 	config       appConfig
 	repoCache    = map[string]repoCacheEntry{}
+	repoLoads    = map[string]*repoLoadCall{}
 	cacheMutex   sync.Mutex
+	preloadMutex sync.Mutex
+	preloadState = preloadSnapshot{Status: "idle", Message: "仓库预热尚未启动"}
 	httpClient   = &http.Client{}
 	tokenRe      = regexp.MustCompile(`[A-Za-z]+|\d+`)
 	debDepSplit  = regexp.MustCompile(`\s*,\s*`)
@@ -300,10 +329,6 @@ var (
 func main() {
 	config = loadConfig()
 
-	if err := preloadConfiguredRepositories(context.Background()); err != nil {
-		log.Fatal(err)
-	}
-
 	staticFS, err := fs.Sub(embeddedFiles, "static")
 	if err != nil {
 		log.Fatal(err)
@@ -313,11 +338,25 @@ func main() {
 	mux.HandleFunc("/", serveIndexOrStatic(staticFS))
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/os-detect", handleOSDetect)
+	mux.HandleFunc("/api/preload", handlePreloadStatus)
 	mux.HandleFunc("/download", handleDownload)
 
 	addr := ":" + getenv("PORT", "3000")
+
+	if config.PreloadBlocking {
+		if err := startRepositoryPreload(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	log.Printf("package-down is running at http://localhost%s", addr)
 	log.Printf("default target: %s", profiles[config.DefaultProfileID].Label)
+
+	if !config.PreloadBlocking {
+		if err := startRepositoryPreload(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	if err := http.ListenAndServe(addr, logRequest(mux)); err != nil {
 		log.Fatal(err)
@@ -355,26 +394,94 @@ func loadConfig() appConfig {
 		MaxPackages:      envInt("MAX_PACKAGES", 50),
 		MaxResolved:      envInt("MAX_RESOLVED_PACKAGES", 300),
 		RequestTimeout:   envDuration("REQUEST_TIMEOUT_MS", 2*time.Minute),
-		PreloadMode:      normalizePreloadMode(getenv("PRELOAD_REPOS", "default")),
+		PreloadMode:      normalizePreloadMode(getenv("PRELOAD_REPOS", "none")),
+		PreloadBlocking:  envBool("PRELOAD_BLOCKING", false),
+		PreloadDelay:     envDurationAllowZero("PRELOAD_DELAY_MS", 2*time.Second),
+		PreloadRepoPause: envDurationAllowZero("PRELOAD_REPO_PAUSE_MS", 500*time.Millisecond),
 		PreloadTimeout:   envDuration("PRELOAD_TIMEOUT_MS", 10*time.Minute),
 		AllowDirectURL:   strings.ToLower(os.Getenv("ALLOW_DIRECT_URLS")) != "false" && strings.ToLower(os.Getenv("ALLOW_DIRECT_RPM_URLS")) != "false",
 	}
 }
 
-func preloadConfiguredRepositories(ctx context.Context) error {
+func startRepositoryPreload(ctx context.Context) error {
 	contexts := preloadDownloadContexts()
 	if len(contexts) == 0 {
-		log.Println("repository preload disabled")
+		updatePreloadStatus(func(state *preloadSnapshot) {
+			*state = preloadSnapshot{
+				Mode:     config.PreloadMode,
+				Blocking: config.PreloadBlocking,
+				Status:   "disabled",
+				Message:  "仓库预热已关闭；下载时会按需加载仓库元数据",
+			}
+		})
+		log.Println("repository preload disabled; repository metadata will load on demand")
 		return nil
 	}
 
+	if config.PreloadBlocking {
+		return preloadConfiguredRepositories(ctx, contexts)
+	}
+
+	updatePreloadStatus(func(state *preloadSnapshot) {
+		*state = preloadSnapshot{
+			Mode:         config.PreloadMode,
+			Blocking:     false,
+			Status:       "waiting",
+			Message:      fmt.Sprintf("服务已启动，仓库将在后台预热；延迟 %s", config.PreloadDelay),
+			TargetsTotal: len(contexts),
+			ReposTotal:   countPreloadRepos(contexts),
+		}
+	})
+
+	log.Printf("repository preload scheduled in background: mode=%s targets=%d delay=%s timeout=%s", config.PreloadMode, len(contexts), config.PreloadDelay, config.PreloadTimeout)
+	go func() {
+		if config.PreloadDelay > 0 {
+			if err := sleepContext(ctx, config.PreloadDelay); err != nil {
+				markPreloadError(err)
+				return
+			}
+		}
+
+		if err := preloadConfiguredRepositories(ctx, contexts); err != nil {
+			log.Printf("background repository preload finished with error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func preloadConfiguredRepositories(ctx context.Context, contexts []downloadContext) error {
 	preloadCtx, cancel := context.WithTimeout(ctx, config.PreloadTimeout)
 	defer cancel()
 
-	log.Printf("preloading repositories before service start: mode=%s targets=%d timeout=%s", config.PreloadMode, len(contexts), config.PreloadTimeout)
+	updatePreloadStatus(func(state *preloadSnapshot) {
+		*state = preloadSnapshot{
+			Mode:         config.PreloadMode,
+			Blocking:     config.PreloadBlocking,
+			Status:       "running",
+			Message:      "正在加载仓库元数据",
+			TargetsTotal: len(contexts),
+			ReposTotal:   countPreloadRepos(contexts),
+			StartedAt:    time.Now().Format(time.RFC3339),
+		}
+	})
+
+	if config.PreloadBlocking {
+		log.Printf("preloading repositories before service start: mode=%s targets=%d timeout=%s", config.PreloadMode, len(contexts), config.PreloadTimeout)
+	} else {
+		log.Printf("preloading repositories in background: mode=%s targets=%d timeout=%s", config.PreloadMode, len(contexts), config.PreloadTimeout)
+	}
+
 	for targetIndex, dctx := range contexts {
 		startedAt := time.Now()
-		log.Printf("preload target %d/%d: %s %s %s repos=%d", targetIndex+1, len(contexts), dctx.Profile.Label, dctx.Arch, dctx.Profile.PackageType, len(dctx.RepoURLs))
+		targetName := preloadTargetName(dctx)
+		updatePreloadStatus(func(state *preloadSnapshot) {
+			state.Status = "running"
+			state.Message = "正在加载 " + targetName
+			state.CurrentTarget = targetName
+			state.CurrentRepo = ""
+		})
+		log.Printf("preload target %d/%d: %s repos=%d", targetIndex+1, len(contexts), targetName, len(dctx.RepoURLs))
 
 		index, errors := loadCombinedIndexWithProgress(preloadCtx, dctx)
 		for _, item := range errors {
@@ -382,13 +489,26 @@ func preloadConfiguredRepositories(ctx context.Context) error {
 		}
 
 		if len(index.ByName) == 0 {
-			return fmt.Errorf("preload failed: %s %s has no loaded packages", dctx.Profile.Label, dctx.Arch)
+			err := fmt.Errorf("preload failed: %s has no loaded packages", targetName)
+			markPreloadError(err)
+			return err
 		}
 
-		log.Printf("preloaded %s %s %s: %d packages in %s", dctx.Profile.Label, dctx.Arch, dctx.Profile.PackageType, len(index.ByName), time.Since(startedAt).Round(time.Second))
+		updatePreloadStatus(func(state *preloadSnapshot) {
+			state.TargetsDone = targetIndex + 1
+			state.Message = fmt.Sprintf("已加载 %s：%d 个包", targetName, len(index.ByName))
+		})
+		log.Printf("preloaded %s: %d packages in %s", targetName, len(index.ByName), time.Since(startedAt).Round(time.Second))
 	}
 
-	log.Println("repository preload completed; starting web service")
+	updatePreloadStatus(func(state *preloadSnapshot) {
+		state.Status = "completed"
+		state.Message = "仓库预热完成"
+		state.CurrentTarget = ""
+		state.CurrentRepo = ""
+		state.FinishedAt = time.Now().Format(time.RFC3339)
+	})
+	log.Println("repository preload completed")
 	return nil
 }
 
@@ -399,20 +519,94 @@ func loadCombinedIndexWithProgress(ctx context.Context, dctx downloadContext) (p
 
 	for index, repo := range dctx.RepoURLs {
 		startedAt := time.Now()
+		updatePreloadStatus(func(state *preloadSnapshot) {
+			state.CurrentRepo = repo.Name
+			state.Message = fmt.Sprintf("正在加载仓库 %d/%d：%s", index+1, total, repo.Name)
+		})
 		log.Printf("preload repo %d/%d start: %s %s", index+1, total, repo.Name, repo.URL)
 
 		repoIndex, err := loadRepoIndex(ctx, dctx.Profile.PackageType, repo)
 		if err != nil {
+			updatePreloadStatus(func(state *preloadSnapshot) {
+				state.ReposDone++
+				state.Message = fmt.Sprintf("仓库加载失败：%s", repo.Name)
+			})
 			log.Printf("preload repo %d/%d failed after %s: %s %s", index+1, total, time.Since(startedAt).Round(time.Second), repo.Name, err)
 			errors = append(errors, manifestErr{Repo: repo.URL, Message: err.Error()})
+			waitBetweenPreloadRepos(ctx, index, total)
 			continue
 		}
 
 		mergeIndex(&combined, repoIndex)
+		updatePreloadStatus(func(state *preloadSnapshot) {
+			state.ReposDone++
+			state.Packages += len(repoIndex.ByName)
+			state.Message = fmt.Sprintf("仓库加载完成：%s，%d 个包", repo.Name, len(repoIndex.ByName))
+		})
 		log.Printf("preload repo %d/%d done: %s packages=%d duration=%s", index+1, total, repo.Name, len(repoIndex.ByName), time.Since(startedAt).Round(time.Second))
+		waitBetweenPreloadRepos(ctx, index, total)
 	}
 
 	return combined, errors
+}
+
+func waitBetweenPreloadRepos(ctx context.Context, index int, total int) {
+	if index+1 >= total || config.PreloadRepoPause <= 0 {
+		return
+	}
+
+	if err := sleepContext(ctx, config.PreloadRepoPause); err != nil {
+		log.Printf("preload pause stopped: %v", err)
+	}
+}
+
+func countPreloadRepos(contexts []downloadContext) int {
+	total := 0
+	for _, ctx := range contexts {
+		total += len(ctx.RepoURLs)
+	}
+	return total
+}
+
+func preloadTargetName(dctx downloadContext) string {
+	return fmt.Sprintf("%s / %s / %s", dctx.Profile.Label, dctx.Arch, dctx.Profile.PackageType)
+}
+
+func updatePreloadStatus(update func(*preloadSnapshot)) {
+	preloadMutex.Lock()
+	defer preloadMutex.Unlock()
+	update(&preloadState)
+}
+
+func currentPreloadStatus() preloadSnapshot {
+	preloadMutex.Lock()
+	defer preloadMutex.Unlock()
+	return preloadState
+}
+
+func markPreloadError(err error) {
+	if err == nil {
+		return
+	}
+
+	updatePreloadStatus(func(state *preloadSnapshot) {
+		state.Status = "error"
+		state.Message = "仓库预热失败"
+		state.LastError = err.Error()
+		state.FinishedAt = time.Now().Format(time.RFC3339)
+	})
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func preloadDownloadContexts() []downloadContext {
@@ -483,11 +677,16 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"maxPackages":    config.MaxPackages,
 		"maxResolved":    config.MaxResolved,
 		"allowDirectURL": config.AllowDirectURL,
+		"preload":        currentPreloadStatus(),
 	})
 }
 
 func handleOSDetect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, detectOperatingSystemFromUserAgent(r.UserAgent()))
+}
+
+func handlePreloadStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, currentPreloadStatus())
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -534,15 +733,6 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		Errors: []manifestErr{},
 	}
 
-	files := resolveRequestedFiles(r.Context(), requested, includeDeps, ctx, &man)
-	man.ResolvedCount = len(files)
-	if len(files) == 0 {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(downloadErrorText(man)))
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", contentDisposition(filename))
 	w.Header().Set("Cache-Control", "no-store")
@@ -560,9 +750,16 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		"Include dependencies: " + strconv.FormatBool(includeDeps),
 		"Requested: " + strings.Join(requested, ", "),
 		"",
+		"Repository metadata is resolved after this ZIP starts streaming.",
 		"Files are streamed into this ZIP as they are downloaded.",
 	}, "\n"))
 	flush(w)
+
+	files := resolveRequestedFiles(r.Context(), requested, includeDeps, ctx, &man)
+	man.ResolvedCount = len(files)
+	if len(files) == 0 && len(man.Errors) == 0 {
+		man.Errors = append(man.Errors, manifestErr{Message: "没有找到可下载的包文件"})
+	}
 
 	for _, file := range files {
 		appendRemotePackage(r.Context(), zipWriter, w, &man, file)
@@ -701,6 +898,22 @@ func loadRepoIndex(ctx context.Context, kind repoKind, repo repoInfo) (packageIn
 		cacheMutex.Unlock()
 		return cached.Index, nil
 	}
+	if call, ok := repoLoads[cacheKey]; ok {
+		cacheMutex.Unlock()
+		log.Printf("waiting for repository index already loading: %s %s", repo.Name, repo.URL)
+		select {
+		case <-ctx.Done():
+			return packageIndex{}, ctx.Err()
+		case <-call.Done:
+			if call.Err != nil {
+				return packageIndex{}, call.Err
+			}
+			return call.Index, nil
+		}
+	}
+
+	call := &repoLoadCall{Done: make(chan struct{})}
+	repoLoads[cacheKey] = call
 	cacheMutex.Unlock()
 
 	var (
@@ -708,6 +921,8 @@ func loadRepoIndex(ctx context.Context, kind repoKind, repo repoInfo) (packageIn
 		err   error
 	)
 
+	startedAt := time.Now()
+	log.Printf("loading repository index: %s %s", repo.Name, repo.URL)
 	switch kind {
 	case repoKindRPM:
 		index, err = fetchRPMRepoIndex(ctx, repo)
@@ -717,14 +932,22 @@ func loadRepoIndex(ctx context.Context, kind repoKind, repo repoInfo) (packageIn
 		err = fmt.Errorf("unsupported repo kind: %s", kind)
 	}
 
+	cacheMutex.Lock()
+	if err == nil {
+		repoCache[cacheKey] = repoCacheEntry{LoadedAt: time.Now(), Index: index}
+	}
+	call.Index = index
+	call.Err = err
+	delete(repoLoads, cacheKey)
+	close(call.Done)
+	cacheMutex.Unlock()
+
 	if err != nil {
+		log.Printf("repository index failed after %s: %s %s", time.Since(startedAt).Round(time.Second), repo.Name, err)
 		return packageIndex{}, err
 	}
 
-	cacheMutex.Lock()
-	repoCache[cacheKey] = repoCacheEntry{LoadedAt: time.Now(), Index: index}
-	cacheMutex.Unlock()
-
+	log.Printf("repository index loaded: %s packages=%d duration=%s", repo.Name, len(index.ByName), time.Since(startedAt).Round(time.Second))
 	return index, nil
 }
 
@@ -1759,9 +1982,29 @@ func envInt(name string, fallback int) int {
 	return value
 }
 
+func envBool(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
 func envDuration(name string, fallback time.Duration) time.Duration {
 	value, err := strconv.Atoi(os.Getenv(name))
 	if err != nil || value <= 0 {
+		return fallback
+	}
+	return time.Duration(value) * time.Millisecond
+}
+
+func envDurationAllowZero(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
 		return fallback
 	}
 	return time.Duration(value) * time.Millisecond

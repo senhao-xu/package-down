@@ -63,7 +63,7 @@ func TestDirectPackageDownloadWritesZipFile(t *testing.T) {
 	}
 }
 
-func TestNoResolvedFilesReturnsTextError(t *testing.T) {
+func TestNoResolvedFilesReturnsZipManifest(t *testing.T) {
 	config = appConfig{
 		DefaultProfileID: "almalinux-9",
 		CacheTTL:         time.Minute,
@@ -85,12 +85,28 @@ func TestNoResolvedFilesReturnsTextError(t *testing.T) {
 	resp := recorder.Result()
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
 	}
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "没有找到可下载的包文件") {
-		t.Fatalf("expected text error, got %q", string(body))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !zipHasFile(reader, "README.txt") {
+		t.Fatalf("expected README.txt in zip, got %#v", zipNames(reader))
+	}
+	manifestBody, ok := readZipFile(t, reader, "manifest.json")
+	if !ok {
+		t.Fatalf("expected manifest.json in zip, got %#v", zipNames(reader))
+	}
+	if !strings.Contains(manifestBody, "direct package url download is disabled") {
+		t.Fatalf("expected manifest error, got %q", manifestBody)
 	}
 }
 
@@ -109,4 +125,25 @@ func zipNames(reader *zip.Reader) []string {
 		names = append(names, file.Name)
 	}
 	return names
+}
+
+func readZipFile(t *testing.T, reader *zip.Reader, name string) (string, bool) {
+	t.Helper()
+
+	for _, file := range reader.File {
+		if file.Name != name {
+			continue
+		}
+		body, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer body.Close()
+		data, err := io.ReadAll(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data), true
+	}
+	return "", false
 }

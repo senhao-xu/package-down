@@ -147,6 +147,16 @@
             <button class="ghost-button" type="button" id="loadConfig">刷新</button>
           </div>
           <p class="side-copy">当前服务会按目标操作系统和架构选择 RPM 或 DEB 仓库。直接 URL 下载可通过环境变量关闭。</p>
+          <div class="preload-status" aria-live="polite">
+            <div class="preload-head">
+              <span>仓库预热</span>
+              <strong id="preloadState">读取中...</strong>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <span id="preloadBar"></span>
+            </div>
+            <p id="preloadMessage">正在读取服务状态。</p>
+          </div>
           <pre class="config-output" id="configOutput">点击刷新查看当前仓库。</pre>
         </aside>
       </section>
@@ -164,6 +174,9 @@
       const output = document.querySelector("#configOutput");
       const detectedOs = document.querySelector("#detectedOs");
       const targetHint = document.querySelector("#targetHint");
+      const preloadState = document.querySelector("#preloadState");
+      const preloadMessage = document.querySelector("#preloadMessage");
+      const preloadBar = document.querySelector("#preloadBar");
       const osProfileSelects = [...document.querySelectorAll(".os-profile-select")];
       const archSelects = [...document.querySelectorAll(".arch-select")];
       const clientOsInputs = [...document.querySelectorAll(".client-os")];
@@ -215,6 +228,8 @@
         const localOs = await detectLocalSystem();
         setClientDetection(localOs);
         await loadConfig(false);
+        await loadPreloadStatus();
+        window.setInterval(loadPreloadStatus, 2500);
         applyDetectedArch(localOs.arch);
         updateTargetHint();
       }
@@ -234,6 +249,7 @@
           const config = await response.json();
           profiles = config.profiles || [];
           renderProfiles(config.selected);
+          renderPreloadStatus(config.preload);
 
           if (showResult) {
             output.textContent = JSON.stringify(config, null, 2);
@@ -243,6 +259,51 @@
         } finally {
           loadConfigButton.disabled = false;
         }
+      }
+
+      async function loadPreloadStatus() {
+        try {
+          const response = await fetch("/api/preload");
+          const status = await response.json();
+          renderPreloadStatus(status);
+        } catch (error) {
+          preloadState.textContent = "读取失败";
+          preloadMessage.textContent = error.message;
+          preloadBar.style.width = "0%";
+        }
+      }
+
+      function renderPreloadStatus(status) {
+        if (!status) {
+          return;
+        }
+
+        const labels = {
+          idle: "未启动",
+          disabled: "已关闭",
+          waiting: "等待中",
+          running: "加载中",
+          completed: "已完成",
+          error: "失败"
+        };
+        const reposTotal = Number(status.reposTotal || 0);
+        const reposDone = Number(status.reposDone || 0);
+        const percent = status.status === "completed"
+          ? 100
+          : reposTotal > 0
+            ? Math.min(100, Math.round((reposDone / reposTotal) * 100))
+            : 0;
+        const pieces = [];
+
+        if (status.currentTarget) pieces.push(status.currentTarget);
+        if (status.currentRepo) pieces.push(status.currentRepo);
+        if (reposTotal > 0) pieces.push(`仓库 ${reposDone}/${reposTotal}`);
+        if (status.packages > 0) pieces.push(`已解析 ${status.packages} 个包`);
+        if (status.lastError) pieces.push(status.lastError);
+
+        preloadState.textContent = labels[status.status] || status.status || "未知";
+        preloadMessage.textContent = pieces.length ? pieces.join(" · ") : status.message || "暂无预热任务";
+        preloadBar.style.width = `${percent}%`;
       }
 
       function renderProfiles(selected) {
