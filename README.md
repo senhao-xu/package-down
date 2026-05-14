@@ -136,7 +136,9 @@ REPO_ARCH=x86_64
 MAX_PACKAGES=50
 MAX_RESOLVED_PACKAGES=300
 CACHE_TTL_MS=1800000
-REQUEST_TIMEOUT_MS=30000
+REQUEST_TIMEOUT_MS=120000
+PRELOAD_REPOS=default
+PRELOAD_TIMEOUT_MS=600000
 ALLOW_DIRECT_URLS=true
 ```
 
@@ -148,10 +150,17 @@ REPO_URLS=https://repo.example.com/os/{arch}/BaseOS/,https://repo.example.com/os
 
 默认端口是 `3000`，默认目标系统是 `AlmaLinux 9 / x86_64`。
 
+启动时会先预加载仓库元数据，加载完成后才启动 Web 服务，避免第一次下载时浏览器长时间无响应：
+
+- `PRELOAD_REPOS=default`：默认值，只预加载默认系统和默认架构。
+- `PRELOAD_REPOS=all`：预加载所有内置系统和架构，启动更慢、占用内存更多。
+- `PRELOAD_REPOS=none`：关闭启动预加载，恢复首次下载时按需加载。
+- `PRELOAD_TIMEOUT_MS=600000`：预加载总超时时间，默认 10 分钟。
+
 ## 依赖下载说明
 
 - RPM：使用 primary metadata 内的 `requires` / `provides` / 常见 file provides 做递归解析。
 - Ubuntu：使用 `Depends` 和 `Pre-Depends` 做递归解析，版本约束会被忽略，优先选择仓库内可用的较新版本。
 - 直接 URL 下载无法解析依赖，只会下载该 URL 指向的文件。
 - 为避免依赖链过大，默认最多解析 `300` 个包，可通过 `MAX_RESOLVED_PACKAGES` 调整。
-- 首次请求某个系统仓库时需要下载仓库元数据，可能会慢一些；后续会按 `CACHE_TTL_MS` 缓存。
+- 未预加载的系统仓库第一次使用时仍需要下载仓库元数据；后续会按 `CACHE_TTL_MS` 缓存。

@@ -58,6 +58,8 @@ type appConfig struct {
 	MaxPackages      int
 	MaxResolved      int
 	RequestTimeout   time.Duration
+	PreloadMode      string
+	PreloadTimeout   time.Duration
 	AllowDirectURL   bool
 }
 
@@ -298,6 +300,10 @@ var (
 func main() {
 	config = loadConfig()
 
+	if err := preloadConfiguredRepositories(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+
 	staticFS, err := fs.Sub(embeddedFiles, "static")
 	if err != nil {
 		log.Fatal(err)
@@ -348,8 +354,65 @@ func loadConfig() appConfig {
 		CacheTTL:         envDuration("CACHE_TTL_MS", 30*time.Minute),
 		MaxPackages:      envInt("MAX_PACKAGES", 50),
 		MaxResolved:      envInt("MAX_RESOLVED_PACKAGES", 300),
-		RequestTimeout:   envDuration("REQUEST_TIMEOUT_MS", 30*time.Second),
+		RequestTimeout:   envDuration("REQUEST_TIMEOUT_MS", 2*time.Minute),
+		PreloadMode:      normalizePreloadMode(getenv("PRELOAD_REPOS", "default")),
+		PreloadTimeout:   envDuration("PRELOAD_TIMEOUT_MS", 10*time.Minute),
 		AllowDirectURL:   strings.ToLower(os.Getenv("ALLOW_DIRECT_URLS")) != "false" && strings.ToLower(os.Getenv("ALLOW_DIRECT_RPM_URLS")) != "false",
+	}
+}
+
+func preloadConfiguredRepositories(ctx context.Context) error {
+	contexts := preloadDownloadContexts()
+	if len(contexts) == 0 {
+		log.Println("repository preload disabled")
+		return nil
+	}
+
+	preloadCtx, cancel := context.WithTimeout(ctx, config.PreloadTimeout)
+	defer cancel()
+
+	log.Printf("preloading repositories before service start: mode=%s targets=%d", config.PreloadMode, len(contexts))
+	for _, dctx := range contexts {
+		startedAt := time.Now()
+		index, errors := loadCombinedIndex(preloadCtx, dctx)
+		for _, item := range errors {
+			log.Printf("preload warning: %s %s %s: %s", dctx.Profile.Label, dctx.Arch, item.Repo, item.Message)
+		}
+
+		if len(index.ByName) == 0 {
+			return fmt.Errorf("preload failed: %s %s has no loaded packages", dctx.Profile.Label, dctx.Arch)
+		}
+
+		log.Printf("preloaded %s %s %s: %d packages in %s", dctx.Profile.Label, dctx.Arch, dctx.Profile.PackageType, len(index.ByName), time.Since(startedAt).Round(time.Second))
+	}
+
+	log.Println("repository preload completed; starting web service")
+	return nil
+}
+
+func preloadDownloadContexts() []downloadContext {
+	switch config.PreloadMode {
+	case "none":
+		return nil
+	case "all":
+		items := []downloadContext{}
+		for _, prof := range listProfiles() {
+			for _, arch := range prof.Arches {
+				values := url.Values{
+					"osProfile": {prof.ID},
+					"arch":      {arch},
+				}
+				items = append(items, resolveDownloadContext(values, ""))
+			}
+		}
+		return items
+	default:
+		prof := profiles[config.DefaultProfileID]
+		values := url.Values{
+			"osProfile": {prof.ID},
+			"arch":      {prof.DefaultArch},
+		}
+		return []downloadContext{resolveDownloadContext(values, "")}
 	}
 }
 
@@ -1613,6 +1676,17 @@ func formBool(values url.Values, name string, fallback bool) bool {
 		return fallback
 	}
 	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func normalizePreloadMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "off", "false", "0":
+		return "none"
+	case "all":
+		return "all"
+	default:
+		return "default"
+	}
 }
 
 func splitList(value string) []string {
