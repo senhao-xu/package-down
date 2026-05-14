@@ -53,6 +53,24 @@ go build -o package-down .
 
 页面、样式和脚本已经通过 Go `embed` 打进可执行文件，部署时不需要复制 `static` 目录。
 
+## 发布 Release
+
+推送 `v*` tag 会自动触发 GitHub Actions，编译并发布以下文件到 Releases：
+
+- `package-down-linux-x86_64.tar.gz`
+- `package-down-linux-arm64.tar.gz`
+- `package-down-windows-x86_64.zip`
+- `checksums.txt`
+
+示例：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+也可以在 GitHub Actions 页面手动运行 `Release` workflow，并填写 tag。
+
 ## 配置
 
 可通过环境变量调整：

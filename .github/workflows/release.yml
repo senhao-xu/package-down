@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag, for example v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag_name }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ -z "$tag" ]]; then
+            echo "Release tag is empty" >&2
+            exit 1
+          fi
+
+          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          build_one() {
+            local goos="$1"
+            local goarch="$2"
+            local suffix="$3"
+            local artifact="$4"
+            local out_dir="dist/${artifact}"
+            local binary="${out_dir}/package-down${suffix}"
+
+            mkdir -p "$out_dir"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags="-s -w" -o "$binary" .
+
+            if [[ "$goos" == "windows" ]]; then
+              (cd "$out_dir" && zip -q "../${artifact}.zip" "package-down${suffix}")
+            else
+              tar -C "$out_dir" -czf "dist/${artifact}.tar.gz" "package-down${suffix}"
+            fi
+          }
+
+          build_one linux amd64 "" package-down-linux-x86_64
+          build_one linux arm64 "" package-down-linux-arm64
+          build_one windows amd64 ".exe" package-down-windows-x86_64
+
+          rm -rf dist/package-down-linux-x86_64 dist/package-down-linux-arm64 dist/package-down-windows-x86_64
+          sha256sum dist/*.tar.gz dist/*.zip > dist/checksums.txt
+          ls -lh dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          files=(dist/*.tar.gz dist/*.zip dist/checksums.txt)
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "package-down ${RELEASE_TAG}" \
+              --notes "Automated release for ${RELEASE_TAG}."
+          fi
