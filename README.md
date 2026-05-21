@@ -2,7 +2,7 @@
 
 一个轻量 Web 工具：用户在页面输入包名或 `.rpm` / `.deb` URL，服务端按目标操作系统解析仓库、下载系统包，并把文件流直接写入 ZIP 响应。
 
-项目使用 Go 标准库实现。页面资源会打进二进制文件里，部署时只需要一个可执行文件。
+项目使用 Go 标准库实现。页面资源会打进二进制文件里，部署时可以使用单个可执行文件，也可以使用 Docker 容器。
 
 ## 功能
 
@@ -53,59 +53,55 @@ go build -o package-down .
 
 页面、样式和脚本已经通过 Go `embed` 打进可执行文件，部署时不需要复制 `static` 目录。
 
+## Docker 部署
+
+直接从源码构建镜像并启动：
+
+```bash
+docker build -t package-down . && docker run -d --name package-down -p 3000:3000 --restart unless-stopped package-down
+```
+
+如需传入配置，可在 `docker run` 时追加环境变量：
+
+```bash
+docker run -d --name package-down -p 3000:3000 --restart unless-stopped -e PRELOAD_REPOS=default package-down
+```
+
+发布 Release 后也会同步推送 GHCR 镜像，可直接运行：
+
+```bash
+docker run -d --name package-down -p 3000:3000 --restart unless-stopped ghcr.io/senhao-xu/package-down:latest
+```
+
 ## 发布 Release
 
-推送 `v*` tag 会自动触发 GitHub Actions，编译并发布以下文件到 Releases：
+推送日期格式 tag 会自动触发 GitHub Actions，编译并发布以下文件到 Releases，例如 `2026521`：
 
 - `package-down-linux-x86_64.tar.gz`
 - `package-down-linux-arm64.tar.gz`
 - `package-down-windows-x86_64.zip`
 - `checksums.txt`
 
+同时会发布 Docker 镜像：
+
+- `ghcr.io/senhao-xu/package-down:<tag>`
+- `ghcr.io/senhao-xu/package-down:latest`
+
 示例：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag 2026521
+git push origin 2026521
 ```
 
 也可以在 GitHub Actions 页面手动运行 `Release` workflow，并填写 tag。
 
 ## 快速部署
 
-Linux 会自动识别 `x86_64` / `arm64` 架构，下载最新 Release、解压、授权并后台启动：
+Linux 会自动识别 `x86_64` / `arm64` 架构，下载最新 Release、安装到 `/opt/package-down` 并启动服务：
 
 ```bash
-set -e
-
-APP_DIR=/opt/package-down
-REPO=senhao-xu/package-down
-ARCH=$(uname -m)
-
-case "$ARCH" in
-  x86_64|amd64)
-    ASSET=package-down-linux-x86_64.tar.gz
-    ;;
-  aarch64|arm64)
-    ASSET=package-down-linux-arm64.tar.gz
-    ;;
-  *)
-    echo "不支持的架构: $ARCH"
-    exit 1
-    ;;
-esac
-
-sudo mkdir -p "$APP_DIR"
-cd "$APP_DIR"
-
-sudo curl -fL -o package-down.tar.gz "https://github.com/${REPO}/releases/latest/download/${ASSET}"
-sudo tar -xzf package-down.tar.gz
-sudo chmod +x package-down
-sudo nohup ./package-down > package-down.log 2>&1 &
-
-echo "Package Proxy 已启动: http://localhost:3000"
-echo "日志文件: ${APP_DIR}/package-down.log"
-echo "查看加载进度: tail -f ${APP_DIR}/package-down.log"
+curl -fsSL https://raw.githubusercontent.com/senhao-xu/package-down/main/scripts/install.sh | sudo sh
 ```
 
 调试时也可以前台启动，直接查看仓库加载进度：
@@ -118,18 +114,7 @@ cd /opt/package-down
 Windows PowerShell 下载并启动：
 
 ```powershell
-$AppDir = "C:\package-down"
-$Asset = "package-down-windows-x86_64.zip"
-$Url = "https://github.com/senhao-xu/package-down/releases/latest/download/$Asset"
-
-New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
-Set-Location $AppDir
-
-Invoke-WebRequest -Uri $Url -OutFile $Asset
-Expand-Archive -Force $Asset .
-Start-Process -FilePath ".\package-down.exe"
-
-Write-Host "Package Proxy 已启动: http://localhost:3000"
+powershell -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing https://raw.githubusercontent.com/senhao-xu/package-down/main/scripts/install.ps1 | iex"
 ```
 
 ## 配置

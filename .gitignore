@@ -9,6 +9,7 @@ package-down
 # Test binary and coverage output
 *.test
 *.out
+*.log
 coverage.*
 *.coverprofile
 profile.cov

@@ -177,6 +177,21 @@ type repoLoadCall struct {
 	Err   error
 }
 
+type repoLoadState struct {
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	ReposTotal  int    `json:"reposTotal"`
+	ReposDone   int    `json:"reposDone"`
+	Packages    int    `json:"packages"`
+	CurrentRepo string `json:"currentRepo,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	FinishedAt  string `json:"finishedAt,omitempty"`
+	LastError   string `json:"lastError,omitempty"`
+	OSProfile   string `json:"osProfile,omitempty"`
+	OSLabel     string `json:"osLabel,omitempty"`
+	Arch        string `json:"arch,omitempty"`
+}
+
 type preloadSnapshot struct {
 	Mode          string `json:"mode"`
 	Blocking      bool   `json:"blocking"`
@@ -187,8 +202,8 @@ type preloadSnapshot struct {
 	ReposTotal    int    `json:"reposTotal"`
 	ReposDone     int    `json:"reposDone"`
 	Packages      int    `json:"packages"`
-	CurrentTarget string `json:"currentTarget"`
-	CurrentRepo   string `json:"currentRepo"`
+	CurrentTarget string `json:"currentTarget,omitempty"`
+	CurrentRepo   string `json:"currentRepo,omitempty"`
 	StartedAt     string `json:"startedAt,omitempty"`
 	FinishedAt    string `json:"finishedAt,omitempty"`
 	LastError     string `json:"lastError,omitempty"`
@@ -317,8 +332,15 @@ var (
 	repoCache    = map[string]repoCacheEntry{}
 	repoLoads    = map[string]*repoLoadCall{}
 	cacheMutex   sync.Mutex
+	loadMutex    sync.Mutex
+	loadStates   = map[string]*repoLoadState{}
+	loadSignals  = map[string]chan struct{}{}
 	preloadMutex sync.Mutex
-	preloadState = preloadSnapshot{Status: "idle", Message: "仓库预热尚未启动"}
+	preloadState = preloadSnapshot{
+		Mode:    "none",
+		Status:  "disabled",
+		Message: "仓库预热已关闭",
+	}
 	httpClient   = &http.Client{}
 	tokenRe      = regexp.MustCompile(`[A-Za-z]+|\d+`)
 	debDepSplit  = regexp.MustCompile(`\s*,\s*`)
@@ -339,24 +361,15 @@ func main() {
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/os-detect", handleOSDetect)
 	mux.HandleFunc("/api/preload", handlePreloadStatus)
+	mux.HandleFunc("/api/preload/start", handlePreloadStart)
 	mux.HandleFunc("/download", handleDownload)
+
+	startRepositoryPreload(context.Background())
 
 	addr := ":" + getenv("PORT", "3000")
 
-	if config.PreloadBlocking {
-		if err := startRepositoryPreload(context.Background()); err != nil {
-			log.Fatal(err)
-		}
-	}
-
 	log.Printf("package-down is running at http://localhost%s", addr)
 	log.Printf("default target: %s", profiles[config.DefaultProfileID].Label)
-
-	if !config.PreloadBlocking {
-		if err := startRepositoryPreload(context.Background()); err != nil {
-			log.Fatal(err)
-		}
-	}
 
 	if err := http.ListenAndServe(addr, logRequest(mux)); err != nil {
 		log.Fatal(err)
@@ -403,7 +416,178 @@ func loadConfig() appConfig {
 	}
 }
 
-func startRepositoryPreload(ctx context.Context) error {
+func profileLoadKey(profileID, arch string) string {
+	return profileID + "|" + arch
+}
+
+func currentLoadStateForKey(key string) repoLoadState {
+	loadMutex.Lock()
+	defer loadMutex.Unlock()
+	if state, ok := loadStates[key]; ok {
+		return *state
+	}
+	return repoLoadState{Status: "idle"}
+}
+
+func snapshotAllLoadStates() map[string]repoLoadState {
+	loadMutex.Lock()
+	defer loadMutex.Unlock()
+	out := make(map[string]repoLoadState, len(loadStates))
+	for key, state := range loadStates {
+		out[key] = *state
+	}
+	return out
+}
+
+// ensureProfileRepos returns a channel that closes once the requested profile's
+// repositories are loaded into repoCache. Concurrent callers for the same
+// profile|arch share the same load goroutine. If the profile is already
+// completed within CacheTTL, the returned channel is already closed.
+func ensureProfileRepos(ctx context.Context, dctx downloadContext) <-chan struct{} {
+	key := profileLoadKey(dctx.Profile.ID, dctx.Arch)
+
+	loadMutex.Lock()
+	if signal, ok := loadSignals[key]; ok {
+		loadMutex.Unlock()
+		return signal
+	}
+
+	if state, ok := loadStates[key]; ok && state.Status == "completed" && allReposCached(dctx) {
+		loadMutex.Unlock()
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+
+	if allReposCached(dctx) {
+		loadStates[key] = &repoLoadState{
+			Status:     "completed",
+			Message:    "仓库元数据已就绪",
+			ReposTotal: len(dctx.RepoURLs),
+			ReposDone:  len(dctx.RepoURLs),
+			OSProfile:  dctx.Profile.ID,
+			OSLabel:    dctx.Profile.Label,
+			Arch:       dctx.Arch,
+			FinishedAt: time.Now().Format(time.RFC3339),
+		}
+		loadMutex.Unlock()
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+
+	signal := make(chan struct{})
+	loadSignals[key] = signal
+	loadStates[key] = &repoLoadState{
+		Status:     "running",
+		Message:    "正在加载仓库元数据",
+		ReposTotal: len(dctx.RepoURLs),
+		OSProfile:  dctx.Profile.ID,
+		OSLabel:    dctx.Profile.Label,
+		Arch:       dctx.Arch,
+		StartedAt:  time.Now().Format(time.RFC3339),
+	}
+	loadMutex.Unlock()
+
+	go runProfileLoad(ctx, key, dctx, signal)
+	return signal
+}
+
+func allReposCached(dctx downloadContext) bool {
+	if len(dctx.RepoURLs) == 0 {
+		return false
+	}
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+	for _, repo := range dctx.RepoURLs {
+		entry, ok := repoCache[string(dctx.Profile.PackageType)+"|"+repo.URL]
+		if !ok || time.Since(entry.LoadedAt) >= config.CacheTTL {
+			return false
+		}
+	}
+	return true
+}
+
+func runProfileLoad(ctx context.Context, key string, dctx downloadContext, signal chan struct{}) {
+	defer func() {
+		loadMutex.Lock()
+		delete(loadSignals, key)
+		loadMutex.Unlock()
+		close(signal)
+	}()
+
+	loadCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-loadCtx.Done():
+		}
+	}()
+
+	total := len(dctx.RepoURLs)
+	repoErrors := []string{}
+
+	for index, repo := range dctx.RepoURLs {
+		startedAt := time.Now()
+		updateLoadState(key, func(state *repoLoadState) {
+			state.CurrentRepo = repo.Name
+			state.Message = fmt.Sprintf("正在加载仓库 %d/%d：%s", index+1, total, repo.Name)
+		})
+		log.Printf("load profile %s repo %d/%d start: %s %s", key, index+1, total, repo.Name, repo.URL)
+
+		repoIndex, err := loadRepoIndex(loadCtx, dctx.Profile.PackageType, repo)
+		if err != nil {
+			repoErrors = append(repoErrors, fmt.Sprintf("%s: %s", repo.Name, err))
+			updateLoadState(key, func(state *repoLoadState) {
+				state.ReposDone++
+				state.Message = fmt.Sprintf("仓库加载失败：%s", repo.Name)
+				state.LastError = err.Error()
+			})
+			log.Printf("load profile %s repo %d/%d failed after %s: %s %s", key, index+1, total, time.Since(startedAt).Round(time.Second), repo.Name, err)
+			continue
+		}
+
+		updateLoadState(key, func(state *repoLoadState) {
+			state.ReposDone++
+			state.Packages += len(repoIndex.ByName)
+			state.Message = fmt.Sprintf("仓库加载完成：%s，%d 个包", repo.Name, len(repoIndex.ByName))
+		})
+		log.Printf("load profile %s repo %d/%d done: %s packages=%d duration=%s", key, index+1, total, repo.Name, len(repoIndex.ByName), time.Since(startedAt).Round(time.Second))
+	}
+
+	updateLoadState(key, func(state *repoLoadState) {
+		state.CurrentRepo = ""
+		state.FinishedAt = time.Now().Format(time.RFC3339)
+		if state.Packages == 0 && len(repoErrors) > 0 {
+			state.Status = "error"
+			state.Message = "仓库加载失败"
+			state.LastError = strings.Join(repoErrors, "; ")
+			return
+		}
+		state.Status = "completed"
+		if len(repoErrors) > 0 {
+			state.Message = fmt.Sprintf("加载完成，但有 %d 个仓库失败：%d 个包", len(repoErrors), state.Packages)
+			state.LastError = strings.Join(repoErrors, "; ")
+		} else {
+			state.Message = fmt.Sprintf("加载完成：%d 个包", state.Packages)
+			state.LastError = ""
+		}
+	})
+}
+
+func updateLoadState(key string, mutate func(*repoLoadState)) {
+	loadMutex.Lock()
+	defer loadMutex.Unlock()
+	state, ok := loadStates[key]
+	if !ok {
+		return
+	}
+	mutate(state)
+}
+
+func startRepositoryPreload(ctx context.Context) {
 	contexts := preloadDownloadContexts()
 	if len(contexts) == 0 {
 		updatePreloadStatus(func(state *preloadSnapshot) {
@@ -411,43 +595,39 @@ func startRepositoryPreload(ctx context.Context) error {
 				Mode:     config.PreloadMode,
 				Blocking: config.PreloadBlocking,
 				Status:   "disabled",
-				Message:  "仓库预热已关闭；下载时会按需加载仓库元数据",
+				Message:  "仓库预热已关闭",
 			}
 		})
-		log.Println("repository preload disabled; repository metadata will load on demand")
-		return nil
+		return
 	}
 
 	if config.PreloadBlocking {
-		return preloadConfiguredRepositories(ctx, contexts)
+		if err := preloadConfiguredRepositories(ctx, contexts); err != nil {
+			log.Printf("repository preload failed: %v", err)
+		}
+		return
 	}
 
 	updatePreloadStatus(func(state *preloadSnapshot) {
 		*state = preloadSnapshot{
 			Mode:         config.PreloadMode,
-			Blocking:     false,
+			Blocking:     config.PreloadBlocking,
 			Status:       "waiting",
-			Message:      fmt.Sprintf("服务已启动，仓库将在后台预热；延迟 %s", config.PreloadDelay),
+			Message:      "等待后台预热启动",
 			TargetsTotal: len(contexts),
 			ReposTotal:   countPreloadRepos(contexts),
 		}
 	})
 
-	log.Printf("repository preload scheduled in background: mode=%s targets=%d delay=%s timeout=%s", config.PreloadMode, len(contexts), config.PreloadDelay, config.PreloadTimeout)
 	go func() {
-		if config.PreloadDelay > 0 {
-			if err := sleepContext(ctx, config.PreloadDelay); err != nil {
-				markPreloadError(err)
-				return
-			}
+		if err := sleepContext(ctx, config.PreloadDelay); err != nil {
+			markPreloadError(err)
+			return
 		}
-
 		if err := preloadConfiguredRepositories(ctx, contexts); err != nil {
-			log.Printf("background repository preload finished with error: %v", err)
+			log.Printf("repository preload failed: %v", err)
 		}
 	}()
-
-	return nil
 }
 
 func preloadConfiguredRepositories(ctx context.Context, contexts []downloadContext) error {
@@ -686,6 +866,43 @@ func handleOSDetect(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePreloadStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, currentPreloadStatus())
+}
+
+func handlePreloadStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if status := currentPreloadStatus(); status.Status == "running" || status.Status == "waiting" {
+		writeJSON(w, status)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+
+	dctx := resolveDownloadContext(r.Form, r.UserAgent())
+	contexts := []downloadContext{dctx}
+	updatePreloadStatus(func(state *preloadSnapshot) {
+		*state = preloadSnapshot{
+			Mode:         "manual",
+			Blocking:     false,
+			Status:       "waiting",
+			Message:      "仓库预热已加入后台任务",
+			TargetsTotal: len(contexts),
+			ReposTotal:   countPreloadRepos(contexts),
+		}
+	})
+	go func() {
+		if err := preloadConfiguredRepositories(context.Background(), contexts); err != nil {
+			log.Printf("manual repository preload failed: %v", err)
+		}
+	}()
+
 	writeJSON(w, currentPreloadStatus())
 }
 

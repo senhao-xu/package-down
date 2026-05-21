@@ -3,16 +3,17 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "[0-9]*"
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag, for example v1.0.0"
+        description: "Release tag, for example 2026521"
         required: true
         type: string
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -84,6 +85,25 @@ jobs:
           rm -rf dist/package-down-linux-x86_64 dist/package-down-linux-arm64 dist/package-down-windows-x86_64
           sha256sum dist/*.tar.gz dist/*.zip > dist/checksums.txt
           ls -lh dist
+
+      - name: Publish Docker image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx create --name package-down-builder --use >/dev/null 2>&1 || docker buildx use package-down-builder
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --tag "${image}:${RELEASE_TAG}" \
+            --tag "${image}:latest" \
+            --push \
+            .
 
       - name: Publish GitHub Release
         env:
