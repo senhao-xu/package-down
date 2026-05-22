@@ -75,7 +75,7 @@ docker run -d --name package-down -p 3000:3000 --restart unless-stopped ghcr.io/
 
 ## 发布 Release
 
-推送日期格式 tag 会自动触发 GitHub Actions，编译并发布以下文件到 Releases，例如 `2026521`：
+推送到 `master` 会自动触发 GitHub Actions，并使用当天日期作为 Release tag，例如 `20260522`。也可以手动推送日期格式 tag 触发发布。
 
 - `package-down-linux-x86_64.tar.gz`
 - `package-down-linux-arm64.tar.gz`
@@ -87,11 +87,17 @@ docker run -d --name package-down -p 3000:3000 --restart unless-stopped ghcr.io/
 - `ghcr.io/senhao-xu/package-down:<tag>`
 - `ghcr.io/senhao-xu/package-down:latest`
 
-示例：
+自动发布：
 
 ```bash
-git tag 2026521
-git push origin 2026521
+git push origin master
+```
+
+手动指定日期 tag 发布：
+
+```bash
+git tag 20260522
+git push origin 20260522
 ```
 
 也可以在 GitHub Actions 页面手动运行 `Release` workflow，并填写 tag。

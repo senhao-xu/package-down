@@ -79,7 +79,7 @@ Package Proxy 是一个 Go 标准库实现的单二进制 Web 服务。用户输
 - `ghcr.io/senhao-xu/package-down:<tag>`
 - `ghcr.io/senhao-xu/package-down:latest`
 
-Release tag 规则已从 `v*` 改为数字开头 tag，例如 `2026521`。推送 `2026521` 会触发发布。
+Release workflow 会在推送到 `master` 时自动发布，并使用 `Asia/Shanghai` 当天日期作为 tag，例如 `20260522`。也保留数字开头 tag 触发和手动 workflow dispatch。
 
 ### 增加一行安装脚本
 
@@ -262,7 +262,8 @@ profile 级加载状态：
 
 Release workflow 触发：
 
-- 推送数字开头 tag，例如 `2026521`。
+- 推送到 `master`，自动使用当天日期 tag，例如 `20260522`。
+- 推送数字开头 tag，例如 `20260522`。
 - 或手动运行 `Release` workflow 并输入 tag。
 
 发布步骤：

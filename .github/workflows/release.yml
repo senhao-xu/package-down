@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "[0-9]*"
   workflow_dispatch:
@@ -37,8 +39,10 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             tag="${{ inputs.tag_name }}"
-          else
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
+          else
+            tag="$(TZ=Asia/Shanghai date +%Y%m%d)"
           fi
 
           if [[ -z "$tag" ]]; then
