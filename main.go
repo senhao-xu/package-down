@@ -192,6 +192,23 @@ type repoLoadState struct {
 	Arch        string `json:"arch,omitempty"`
 }
 
+type profileIndexState struct {
+	OSProfile   string     `json:"osProfile"`
+	OSLabel     string     `json:"osLabel"`
+	PackageType repoKind   `json:"packageType"`
+	Arch        string     `json:"arch"`
+	Repos       []repoInfo `json:"repos"`
+	Status      string     `json:"status"`
+	Message     string     `json:"message"`
+	ReposTotal  int        `json:"reposTotal"`
+	ReposDone   int        `json:"reposDone"`
+	Packages    int        `json:"packages"`
+	CurrentRepo string     `json:"currentRepo,omitempty"`
+	StartedAt   string     `json:"startedAt,omitempty"`
+	FinishedAt  string     `json:"finishedAt,omitempty"`
+	LastError   string     `json:"lastError,omitempty"`
+}
+
 type preloadSnapshot struct {
 	Mode          string `json:"mode"`
 	Blocking      bool   `json:"blocking"`
@@ -327,6 +344,29 @@ var (
 				{Name: "ports-security-universe", URL: "https://ports.ubuntu.com/ubuntu-ports/dists/jammy-security/universe/binary-{arch}/Packages.gz", Tags: []string{"arm64"}},
 			},
 		},
+		"ubuntu-20.04": {
+			ID:          "ubuntu-20.04",
+			Label:       "Ubuntu 20.04 LTS",
+			Family:      "Ubuntu",
+			Version:     "20.04",
+			PackageType: repoKindDEB,
+			DefaultArch: "amd64",
+			Arches:      []string{"amd64", "arm64"},
+			Repos: []repoTemplate{
+				{Name: "main", URL: "https://archive.ubuntu.com/ubuntu/dists/focal/main/binary-{arch}/Packages.gz", Tags: []string{"amd64"}},
+				{Name: "universe", URL: "https://archive.ubuntu.com/ubuntu/dists/focal/universe/binary-{arch}/Packages.gz", Tags: []string{"amd64"}},
+				{Name: "updates-main", URL: "https://archive.ubuntu.com/ubuntu/dists/focal-updates/main/binary-{arch}/Packages.gz", Tags: []string{"amd64"}},
+				{Name: "updates-universe", URL: "https://archive.ubuntu.com/ubuntu/dists/focal-updates/universe/binary-{arch}/Packages.gz", Tags: []string{"amd64"}},
+				{Name: "security-main", URL: "https://security.ubuntu.com/ubuntu/dists/focal-security/main/binary-{arch}/Packages.gz", Tags: []string{"amd64"}},
+				{Name: "security-universe", URL: "https://security.ubuntu.com/ubuntu/dists/focal-security/universe/binary-{arch}/Packages.gz", Tags: []string{"amd64"}},
+				{Name: "ports-main", URL: "https://ports.ubuntu.com/ubuntu-ports/dists/focal/main/binary-{arch}/Packages.gz", Tags: []string{"arm64"}},
+				{Name: "ports-universe", URL: "https://ports.ubuntu.com/ubuntu-ports/dists/focal/universe/binary-{arch}/Packages.gz", Tags: []string{"arm64"}},
+				{Name: "ports-updates-main", URL: "https://ports.ubuntu.com/ubuntu-ports/dists/focal-updates/main/binary-{arch}/Packages.gz", Tags: []string{"arm64"}},
+				{Name: "ports-updates-universe", URL: "https://ports.ubuntu.com/ubuntu-ports/dists/focal-updates/universe/binary-{arch}/Packages.gz", Tags: []string{"arm64"}},
+				{Name: "ports-security-main", URL: "https://ports.ubuntu.com/ubuntu-ports/dists/focal-security/main/binary-{arch}/Packages.gz", Tags: []string{"arm64"}},
+				{Name: "ports-security-universe", URL: "https://ports.ubuntu.com/ubuntu-ports/dists/focal-security/universe/binary-{arch}/Packages.gz", Tags: []string{"arm64"}},
+			},
+		},
 	}
 	config       appConfig
 	repoCache    = map[string]repoCacheEntry{}
@@ -359,6 +399,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", serveIndexOrStatic(staticFS))
 	mux.HandleFunc("/api/config", handleConfig)
+	mux.HandleFunc("/api/indexes", handleIndexStatus)
 	mux.HandleFunc("/api/os-detect", handleOSDetect)
 	mux.HandleFunc("/api/preload", handlePreloadStatus)
 	mux.HandleFunc("/api/preload/start", handlePreloadStart)
@@ -439,6 +480,66 @@ func snapshotAllLoadStates() map[string]repoLoadState {
 	return out
 }
 
+func listProfileIndexStates() []profileIndexState {
+	items := []profileIndexState{}
+	for _, prof := range listProfiles() {
+		for _, arch := range prof.Arches {
+			values := url.Values{
+				"osProfile": {prof.ID},
+				"arch":      {arch},
+			}
+			items = append(items, profileIndexStateForContext(resolveDownloadContext(values, "")))
+		}
+	}
+	return items
+}
+
+func profileIndexStateForContext(dctx downloadContext) profileIndexState {
+	state := currentLoadStateForKey(profileLoadKey(dctx.Profile.ID, dctx.Arch))
+	if state.Status == "" {
+		state.Status = "idle"
+	}
+	if state.Status == "completed" && !allReposCached(dctx) {
+		state = repoLoadState{Status: "idle"}
+	}
+	if state.Status == "idle" && allReposCached(dctx) {
+		state = repoLoadState{
+			Status:     "completed",
+			Message:    "仓库元数据已就绪",
+			ReposTotal: len(dctx.RepoURLs),
+			ReposDone:  len(dctx.RepoURLs),
+			Packages:   cachedPackageCount(dctx),
+			OSProfile:  dctx.Profile.ID,
+			OSLabel:    dctx.Profile.Label,
+			Arch:       dctx.Arch,
+			FinishedAt: time.Now().Format(time.RFC3339),
+		}
+	}
+	if state.Message == "" {
+		state.Message = "未加载"
+	}
+	if state.ReposTotal == 0 {
+		state.ReposTotal = len(dctx.RepoURLs)
+	}
+
+	return profileIndexState{
+		OSProfile:   dctx.Profile.ID,
+		OSLabel:     dctx.Profile.Label,
+		PackageType: dctx.Profile.PackageType,
+		Arch:        dctx.Arch,
+		Repos:       dctx.RepoURLs,
+		Status:      state.Status,
+		Message:     state.Message,
+		ReposTotal:  state.ReposTotal,
+		ReposDone:   state.ReposDone,
+		Packages:    state.Packages,
+		CurrentRepo: state.CurrentRepo,
+		StartedAt:   state.StartedAt,
+		FinishedAt:  state.FinishedAt,
+		LastError:   state.LastError,
+	}
+}
+
 // ensureProfileRepos returns a channel that closes once the requested profile's
 // repositories are loaded into repoCache. Concurrent callers for the same
 // profile|arch share the same load goroutine. If the profile is already
@@ -506,6 +607,20 @@ func allReposCached(dctx downloadContext) bool {
 		}
 	}
 	return true
+}
+
+func cachedPackageCount(dctx downloadContext) int {
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+	total := 0
+	for _, repo := range dctx.RepoURLs {
+		entry, ok := repoCache[string(dctx.Profile.PackageType)+"|"+repo.URL]
+		if !ok || time.Since(entry.LoadedAt) >= config.CacheTTL {
+			continue
+		}
+		total += len(entry.Index.ByName)
+	}
+	return total
 }
 
 func runProfileLoad(ctx context.Context, key string, dctx downloadContext, signal chan struct{}) {
@@ -854,11 +969,16 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		},
 		"detected":       ctx.Client,
 		"profiles":       listProfiles(),
+		"indexes":        listProfileIndexStates(),
 		"maxPackages":    config.MaxPackages,
 		"maxResolved":    config.MaxResolved,
 		"allowDirectURL": config.AllowDirectURL,
 		"preload":        currentPreloadStatus(),
 	})
+}
+
+func handleIndexStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, listProfileIndexStates())
 }
 
 func handleOSDetect(w http.ResponseWriter, r *http.Request) {
@@ -875,35 +995,26 @@ func handlePreloadStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if status := currentPreloadStatus(); status.Status == "running" || status.Status == "waiting" {
-		writeJSON(w, status)
-		return
-	}
-
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
 
 	dctx := resolveDownloadContext(r.Form, r.UserAgent())
-	contexts := []downloadContext{dctx}
+	_ = ensureProfileRepos(context.Background(), dctx)
 	updatePreloadStatus(func(state *preloadSnapshot) {
 		*state = preloadSnapshot{
-			Mode:         "manual",
-			Blocking:     false,
-			Status:       "waiting",
-			Message:      "仓库预热已加入后台任务",
-			TargetsTotal: len(contexts),
-			ReposTotal:   countPreloadRepos(contexts),
+			Mode:          "manual",
+			Blocking:      false,
+			Status:        "waiting",
+			Message:       "仓库索引已加入加载任务",
+			CurrentTarget: preloadTargetName(dctx),
+			TargetsTotal:  1,
+			ReposTotal:    len(dctx.RepoURLs),
 		}
 	})
-	go func() {
-		if err := preloadConfiguredRepositories(context.Background(), contexts); err != nil {
-			log.Printf("manual repository preload failed: %v", err)
-		}
-	}()
 
-	writeJSON(w, currentPreloadStatus())
+	writeJSON(w, profileIndexStateForContext(dctx))
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -1538,9 +1649,39 @@ func listProfiles() []profile {
 		items = append(items, prof)
 	}
 	sort.Slice(items, func(i, j int) bool {
+		leftOrder := profileDisplayOrder(items[i].ID)
+		rightOrder := profileDisplayOrder(items[j].ID)
+		if leftOrder != rightOrder {
+			return leftOrder < rightOrder
+		}
 		return items[i].Label < items[j].Label
 	})
 	return items
+}
+
+func profileDisplayOrder(id string) int {
+	switch id {
+	case "ubuntu-20.04":
+		return 10
+	case "ubuntu-22.04":
+		return 11
+	case "ubuntu-24.04":
+		return 12
+	case "centos-7":
+		return 20
+	case "centos-stream-9":
+		return 21
+	case "almalinux-8":
+		return 30
+	case "almalinux-9":
+		return 31
+	case "rocky-9":
+		return 32
+	case "custom":
+		return 40
+	default:
+		return 100
+	}
 }
 
 func detectOperatingSystemFromUserAgent(userAgent string) detectedClient {

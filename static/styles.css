@@ -214,6 +214,12 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.quick-option {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin: 0 4px;
+}
+
 input,
 select,
 textarea {
@@ -433,11 +439,6 @@ label {
   color: var(--primary);
 }
 
-.side-panel {
-  position: sticky;
-  top: 86px;
-}
-
 .side-copy {
   margin: 0;
   padding: 20px 24px;
@@ -489,6 +490,128 @@ label {
   font-size: 0.86rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.index-list {
+  display: grid;
+  gap: 12px;
+  max-height: 520px;
+  margin: 0 24px 24px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.index-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 14px;
+}
+
+.index-card-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.index-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.index-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.index-title strong {
+  font-size: 0.96rem;
+}
+
+.os-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.os-icon-ubuntu {
+  background: #bc4636;
+}
+
+.os-icon-centos {
+  background: #7a4aa0;
+}
+
+.os-icon-alma {
+  background: #0b8068;
+}
+
+.os-icon-rocky {
+  background: #4b7f52;
+}
+
+.os-icon-custom {
+  background: var(--muted);
+}
+
+.index-title span,
+.repo-names,
+.empty-state {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.status-badge {
+  flex: 0 0 auto;
+  min-width: 58px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  padding: 4px 8px;
+  color: var(--primary);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.status-running .status-badge,
+.status-waiting .status-badge {
+  color: var(--focus);
+}
+
+.status-error .status-badge {
+  color: var(--accent);
+}
+
+.index-progress {
+  height: 6px;
+}
+
+.index-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.index-load-button {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 0.86rem;
 }
 
 .config-output {
@@ -593,6 +716,10 @@ label {
 
   .preload-status {
     margin: 0 20px 18px;
+  }
+
+  .index-list {
+    margin: 0 20px 20px;
   }
 
   .config-output {

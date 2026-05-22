@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Package Proxy</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -59,6 +60,11 @@
             <span class="button-icon" aria-hidden="true">↓</span>
             下载 ZIP
           </button>
+
+          <label class="option-row quick-option">
+            <input type="checkbox" class="include-deps-toggle" checked>
+            <span>同时下载依赖包</span>
+          </label>
         </form>
 
         <div class="badges" aria-label="下载特性">
@@ -149,7 +155,7 @@
           <p class="side-copy">当前服务会按目标操作系统和架构选择 RPM 或 DEB 仓库。直接 URL 下载可通过环境变量关闭。</p>
           <div class="preload-status" aria-live="polite">
             <div class="preload-head">
-              <span>仓库预热</span>
+              <span>索引加载</span>
               <strong id="preloadState">读取中...</strong>
             </div>
             <div class="progress-track" aria-hidden="true">
@@ -157,7 +163,8 @@
             </div>
             <p id="preloadMessage">正在读取服务状态。</p>
           </div>
-          <pre class="config-output" id="configOutput">点击刷新查看当前仓库。</pre>
+          <div class="index-list" id="repoIndexList" aria-live="polite"></div>
+          <pre class="config-output" id="configOutput" hidden></pre>
         </aside>
       </section>
     </main>
@@ -177,6 +184,7 @@
       const preloadState = document.querySelector("#preloadState");
       const preloadMessage = document.querySelector("#preloadMessage");
       const preloadBar = document.querySelector("#preloadBar");
+      const repoIndexList = document.querySelector("#repoIndexList");
       const osProfileSelects = [...document.querySelectorAll(".os-profile-select")];
       const archSelects = [...document.querySelectorAll(".arch-select")];
       const clientOsInputs = [...document.querySelectorAll(".client-os")];
@@ -185,6 +193,7 @@
       const includeDepsValues = [...document.querySelectorAll(".include-deps-value")];
       const savedTheme = localStorage.getItem("theme");
       let profiles = [];
+      let indexItems = [];
 
       if (savedTheme) {
         root.dataset.theme = savedTheme;
@@ -248,7 +257,9 @@
           const response = await fetch(`/api/config?${params.toString()}`);
           const config = await response.json();
           profiles = config.profiles || [];
+          indexItems = config.indexes || [];
           renderProfiles(config.selected);
+          renderIndexList(indexItems);
           renderPreloadStatus(config.preload);
 
           if (showResult) {
@@ -263,9 +274,14 @@
 
       async function loadPreloadStatus() {
         try {
-          const response = await fetch("/api/preload");
-          const status = await response.json();
+          const [preloadResponse, indexResponse] = await Promise.all([
+            fetch("/api/preload"),
+            fetch("/api/indexes")
+          ]);
+          const status = await preloadResponse.json();
+          indexItems = await indexResponse.json();
           renderPreloadStatus(status);
+          renderIndexList(indexItems);
         } catch (error) {
           preloadState.textContent = "读取失败";
           preloadMessage.textContent = error.message;
@@ -274,9 +290,29 @@
       }
 
       function renderPreloadStatus(status) {
-        if (!status) {
+        if (indexItems.length) {
+          const running = indexItems.find((item) => item.status === "running" || item.status === "waiting");
+          const completed = indexItems.filter((item) => item.status === "completed").length;
+          const failed = indexItems.filter((item) => item.status === "error").length;
+          const total = indexItems.length;
+
+          if (running) {
+            const reposTotal = Number(running.reposTotal || running.repos?.length || 0);
+            const reposDone = Number(running.reposDone || 0);
+            const percent = reposTotal > 0 ? Math.min(100, Math.round((reposDone / reposTotal) * 100)) : 0;
+            preloadState.textContent = "加载中";
+            preloadMessage.textContent = `${running.osLabel} / ${running.arch} · 源 ${reposDone}/${reposTotal}${running.currentRepo ? " · " + running.currentRepo : ""}`;
+            preloadBar.style.width = `${percent}%`;
+            return;
+          }
+
+          preloadState.textContent = completed > 0 ? "部分就绪" : "未加载";
+          preloadMessage.textContent = `索引 ${completed}/${total} 已就绪${failed > 0 ? " · 失败 " + failed : ""}`;
+          preloadBar.style.width = total > 0 ? `${Math.round((completed / total) * 100)}%` : "0%";
           return;
         }
+
+        if (!status) return;
 
         const labels = {
           idle: "未启动",
@@ -304,6 +340,125 @@
         preloadState.textContent = labels[status.status] || status.status || "未知";
         preloadMessage.textContent = pieces.length ? pieces.join(" · ") : status.message || "暂无预热任务";
         preloadBar.style.width = `${percent}%`;
+      }
+
+      function renderIndexList(items) {
+        repoIndexList.innerHTML = "";
+        if (!items.length) {
+          const empty = document.createElement("p");
+          empty.className = "empty-state";
+          empty.textContent = "暂无可加载的系统索引。";
+          repoIndexList.append(empty);
+          return;
+        }
+
+        const labels = {
+          idle: "未加载",
+          disabled: "未加载",
+          waiting: "等待中",
+          running: "加载中",
+          completed: "已完成",
+          error: "失败"
+        };
+
+        for (const item of items) {
+          const reposTotal = Number(item.reposTotal || item.repos?.length || 0);
+          const reposDone = Number(item.reposDone || 0);
+          const percent = item.status === "completed"
+            ? 100
+            : reposTotal > 0
+              ? Math.min(100, Math.round((reposDone / reposTotal) * 100))
+              : 0;
+
+          const card = document.createElement("article");
+          card.className = `index-card status-${item.status || "idle"}`;
+
+          const head = document.createElement("div");
+          head.className = "index-card-head";
+
+          const title = document.createElement("div");
+          title.className = "index-title";
+          const titleLine = document.createElement("div");
+          titleLine.className = "index-title-line";
+          const icon = document.createElement("span");
+          icon.className = `os-icon os-icon-${osIconClass(item.osProfile)}`;
+          icon.textContent = osIconText(item.osProfile);
+          icon.setAttribute("aria-hidden", "true");
+          const name = document.createElement("strong");
+          name.textContent = `${item.osLabel} / ${item.arch}`;
+          titleLine.append(icon, name);
+          const meta = document.createElement("span");
+          meta.textContent = `${item.packageType} · ${reposTotal} 个源`;
+          title.append(titleLine, meta);
+
+          const badge = document.createElement("span");
+          badge.className = "status-badge";
+          badge.textContent = labels[item.status] || item.status || "未知";
+
+          head.append(title, badge);
+
+          const track = document.createElement("div");
+          track.className = "progress-track index-progress";
+          const bar = document.createElement("span");
+          bar.style.width = `${percent}%`;
+          track.append(bar);
+
+          const info = document.createElement("p");
+          const pieces = [];
+          if (reposTotal > 0) pieces.push(`源 ${reposDone}/${reposTotal}`);
+          if (item.packages > 0) pieces.push(`已解析 ${item.packages} 个包`);
+          if (item.currentRepo) pieces.push(item.currentRepo);
+          if (item.lastError) pieces.push(item.lastError);
+          info.textContent = pieces.length ? pieces.join(" · ") : item.message || "未加载";
+
+          const repos = document.createElement("p");
+          repos.className = "repo-names";
+          repos.textContent = (item.repos || []).map((repo) => repo.name).join("、");
+
+          const button = document.createElement("button");
+          button.className = "ghost-button index-load-button";
+          button.type = "button";
+          button.textContent = item.status === "completed" ? "重新加载" : "加载索引";
+          button.disabled = item.status === "running" || item.status === "waiting";
+          button.addEventListener("click", () => startIndexLoad(item));
+
+          card.append(head, track, info, repos, button);
+          repoIndexList.append(card);
+        }
+      }
+
+      async function startIndexLoad(item) {
+        const body = new URLSearchParams({
+          osProfile: item.osProfile,
+          arch: item.arch
+        });
+        try {
+          await fetch("/api/preload/start", {
+            method: "POST",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body
+          });
+          await loadPreloadStatus();
+        } catch (error) {
+          preloadState.textContent = "加载失败";
+          preloadMessage.textContent = error.message;
+        }
+      }
+
+      function osIconClass(profileID) {
+        if (profileID.startsWith("ubuntu")) return "ubuntu";
+        if (profileID.startsWith("centos")) return "centos";
+        if (profileID.startsWith("almalinux")) return "alma";
+        if (profileID.startsWith("rocky")) return "rocky";
+        return "custom";
+      }
+
+      function osIconText(profileID) {
+        if (profileID.startsWith("ubuntu")) return "U";
+        if (profileID.startsWith("centos")) return "C";
+        if (profileID.startsWith("almalinux")) return "A";
+        if (profileID.startsWith("rocky")) return "R";
+        return "P";
       }
 
       function renderProfiles(selected) {

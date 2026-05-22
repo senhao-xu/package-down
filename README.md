@@ -8,9 +8,9 @@
 
 - 页面输入一个或多个包名，支持空格、逗号、换行分隔。
 - 自动识别当前浏览器操作系统和 CPU 架构，并给出目标架构默认值。
-- 支持选择目标操作系统：AlmaLinux 8/9、CentOS 7.9、Rocky Linux 9、CentOS Stream 9、Ubuntu 22.04/24.04。
+- 支持选择目标操作系统：Ubuntu 20.04/22.04/24.04、CentOS 7.9、CentOS Stream 9、AlmaLinux 8/9、Rocky Linux 9。
 - 支持 RPM 和 Ubuntu DEB 仓库。
-- 默认递归下载依赖包，可在页面关闭。
+- 是否下载依赖由用户选择，默认递归下载依赖包，可在页面关闭。
 - 支持直接粘贴 `.rpm` 或 `.deb` URL。
 - RPM 通过仓库 `repodata` 解析包名、requires 和 provides。
 - Ubuntu 通过 `Packages.gz` 解析包名、Depends 和 Pre-Depends。
@@ -147,6 +147,8 @@ REPO_URLS=https://repo.example.com/os/{arch}/BaseOS/,https://repo.example.com/os
 默认端口是 `3000`，默认目标系统是 `AlmaLinux 9 / x86_64`。
 
 默认不在启动时预加载仓库元数据，服务会先轻量启动，下载请求会先返回 ZIP 流，再按需解析仓库。这样启动占用最低，也不会出现浏览器一直没有响应的感觉。
+
+页面右侧“仓库配置”会展示所有支持系统和架构的源索引状态。服务启动后默认不加载任何索引；需要提前准备某个系统时，可以在该区域点击对应条目的“加载索引”，页面会显示加载进度。
 
 如需提前预热仓库，可打开后台预热；页面右侧“仓库预热”会显示当前进度，日志里也会输出每个仓库的加载进度：
 

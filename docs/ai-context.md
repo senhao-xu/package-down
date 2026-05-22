@@ -44,6 +44,18 @@ Package Proxy 是一个 Go 标准库实现的单二进制 Web 服务。用户输
 - `PRELOAD_BLOCKING=true` 时先预热再启动 HTTP 服务。
 - 非阻塞预热会按 `PRELOAD_DELAY_MS` 延迟后台启动。
 
+### 增加按系统索引加载
+
+仓库配置面板已改为展示所有支持系统和架构的源索引状态。启动时默认不加载任何索引；用户可在页面右侧对某个系统/架构点击“加载索引”，后端只加载该 profile + arch 对应的仓库元数据。
+
+相关接口：
+
+- `GET /api/indexes`：返回所有 profile + arch 的索引状态。
+- `POST /api/preload/start`：接收 `osProfile` 和 `arch`，触发对应索引加载。
+- `GET /api/config`：同时返回 `indexes`，供页面初始化渲染。
+
+索引加载使用 `ensureProfileRepos`，进度写入 `loadStates`，前端轮询 `/api/indexes` 刷新每个系统索引的状态。
+
 ### 增加 Docker 支持
 
 新增 `Dockerfile`，使用多阶段构建：
@@ -113,11 +125,11 @@ Windows 脚本下载 latest Release zip，解压到 `C:\package-down`，然后�
 
 当前包含：
 
-- AlmaLinux 8 / 9
+- Ubuntu 20.04 / 22.04 / 24.04
 - CentOS 7.9
-- Rocky Linux 9
 - CentOS Stream 9
-- Ubuntu 22.04 / 24.04
+- AlmaLinux 8 / 9
+- Rocky Linux 9
 
 RPM profile 使用仓库根路径，服务会读取 `repodata/repomd.xml` 并定位 primary metadata。
 
@@ -172,6 +184,7 @@ Ubuntu DEB profile 使用 `Packages.gz` 完整路径。Ubuntu 使用 repo `Tags`
 - 先通过 `loadCombinedIndex` 加载目标 profile 的所有仓库索引。
 - 用 `findBestPackage` 按名称和 providers 查找最佳候选包。
 - 如果 `includeDeps=true`，递归解析依赖。
+- `includeDeps` 由用户在页面选择，默认值为 `true`。
 
 RPM：
 
