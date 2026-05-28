@@ -136,7 +136,6 @@ MAX_PACKAGES=50
 MAX_RESOLVED_PACKAGES=300
 CACHE_TTL_MS=1800000
 REQUEST_TIMEOUT_MS=120000
-INDEX_TIMEOUT_MS=600000
 PRELOAD_REPOS=none
 PRELOAD_BLOCKING=false
 PRELOAD_DELAY_MS=2000
@@ -152,7 +151,6 @@ REPO_URLS=https://repo.example.com/os/{arch}/BaseOS/,https://repo.example.com/os
 ```
 
 默认端口是 `3000`，默认目标系统是 `AlmaLinux 9 / x86_64`。
-`REQUEST_TIMEOUT_MS` 用于单个包文件下载，`INDEX_TIMEOUT_MS` 用于仓库元数据下载和解析；大型仓库（如银河麒麟 Updates）首次加载可能需要更长索引超时。
 
 默认不在启动时预加载仓库元数据，服务会先轻量启动，下载请求会先返回 ZIP 流，再按需解析仓库。这样启动占用最低，也不会出现浏览器一直没有响应的感觉。
 
