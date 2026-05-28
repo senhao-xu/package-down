@@ -58,6 +58,7 @@ type appConfig struct {
 	MaxPackages      int
 	MaxResolved      int
 	RequestTimeout   time.Duration
+	IndexTimeout     time.Duration
 	PreloadMode      string
 	PreloadBlocking  bool
 	PreloadDelay     time.Duration
@@ -461,6 +462,7 @@ func loadConfig() appConfig {
 		MaxPackages:      envInt("MAX_PACKAGES", 50),
 		MaxResolved:      envInt("MAX_RESOLVED_PACKAGES", 300),
 		RequestTimeout:   envDuration("REQUEST_TIMEOUT_MS", 2*time.Minute),
+		IndexTimeout:     envDuration("INDEX_TIMEOUT_MS", 10*time.Minute),
 		PreloadMode:      normalizePreloadMode(getenv("PRELOAD_REPOS", "none")),
 		PreloadBlocking:  envBool("PRELOAD_BLOCKING", false),
 		PreloadDelay:     envDurationAllowZero("PRELOAD_DELAY_MS", 2*time.Second),
@@ -1295,7 +1297,7 @@ func loadRepoIndex(ctx context.Context, kind repoKind, repo repoInfo) (packageIn
 func fetchRPMRepoIndex(ctx context.Context, repo repoInfo) (packageIndex, error) {
 	repoURL := ensureTrailingSlash(repo.URL)
 	repomdURL := resolveURL(repoURL, "repodata/repomd.xml")
-	repomdBody, err := fetchBytes(ctx, repomdURL)
+	repomdBody, err := fetchIndexBytes(ctx, repomdURL)
 	if err != nil {
 		return packageIndex{}, err
 	}
@@ -1306,7 +1308,7 @@ func fetchRPMRepoIndex(ctx context.Context, repo repoInfo) (packageIndex, error)
 	}
 
 	primaryURL := resolveURL(repoURL, primaryHref)
-	resp, cancel, err := fetchResponse(ctx, primaryURL)
+	resp, cancel, err := fetchIndexResponse(ctx, primaryURL)
 	if err != nil {
 		return packageIndex{}, err
 	}
@@ -1327,7 +1329,7 @@ func fetchRPMRepoIndex(ctx context.Context, repo repoInfo) (packageIndex, error)
 }
 
 func fetchDEBRepoIndex(ctx context.Context, repo repoInfo) (packageIndex, error) {
-	resp, cancel, err := fetchResponse(ctx, repo.URL)
+	resp, cancel, err := fetchIndexResponse(ctx, repo.URL)
 	if err != nil {
 		return packageIndex{}, err
 	}
@@ -1347,8 +1349,8 @@ func fetchDEBRepoIndex(ctx context.Context, repo repoInfo) (packageIndex, error)
 	return parseDEBPackages(reader, repo)
 }
 
-func fetchBytes(ctx context.Context, remoteURL string) ([]byte, error) {
-	resp, cancel, err := fetchResponse(ctx, remoteURL)
+func fetchIndexBytes(ctx context.Context, remoteURL string) ([]byte, error) {
+	resp, cancel, err := fetchIndexResponse(ctx, remoteURL)
 	if err != nil {
 		return nil, err
 	}
@@ -1358,8 +1360,16 @@ func fetchBytes(ctx context.Context, remoteURL string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+func fetchIndexResponse(ctx context.Context, remoteURL string) (*http.Response, context.CancelFunc, error) {
+	return fetchResponseWithTimeout(ctx, remoteURL, config.IndexTimeout)
+}
+
 func fetchResponse(ctx context.Context, remoteURL string) (*http.Response, context.CancelFunc, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, config.RequestTimeout)
+	return fetchResponseWithTimeout(ctx, remoteURL, config.RequestTimeout)
+}
+
+func fetchResponseWithTimeout(ctx context.Context, remoteURL string, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, remoteURL, nil)
 	if err != nil {
