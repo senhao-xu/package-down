@@ -298,6 +298,19 @@ var (
 				{Name: "CRB", URL: "https://mirror.stream.centos.org/9-stream/CRB/{arch}/os/"},
 			},
 		},
+		"kylin-v10-sp3-2403": {
+			ID:          "kylin-v10-sp3-2403",
+			Label:       "银河麒麟 V10 SP3 2403",
+			Family:      "Kylin",
+			Version:     "V10 SP3 2403",
+			PackageType: repoKindRPM,
+			DefaultArch: "x86_64",
+			Arches:      []string{"x86_64", "aarch64"},
+			Repos: []repoTemplate{
+				{Name: "Base", URL: "https://update.cs2c.com.cn/NS/V10/V10SP3-2403/os/adv/lic/base/{arch}/"},
+				{Name: "Updates", URL: "https://update.cs2c.com.cn/NS/V10/V10SP3-2403/os/adv/lic/updates/{arch}/"},
+			},
+		},
 		"ubuntu-24.04": {
 			ID:          "ubuntu-24.04",
 			Label:       "Ubuntu 24.04 LTS",
@@ -1677,6 +1690,8 @@ func profileDisplayOrder(id string) int {
 		return 31
 	case "rocky-9":
 		return 32
+	case "kylin-v10-sp3-2403":
+		return 33
 	case "custom":
 		return 40
 	default:

@@ -8,7 +8,7 @@
 
 - 页面输入一个或多个包名，支持空格、逗号、换行分隔。
 - 自动识别当前浏览器操作系统和 CPU 架构，并给出目标架构默认值。
-- 支持选择目标操作系统：Ubuntu 20.04/22.04/24.04、CentOS 7.9、CentOS Stream 9、AlmaLinux 8/9、Rocky Linux 9。
+- 支持选择目标操作系统：Ubuntu 20.04/22.04/24.04、CentOS 7.9、CentOS Stream 9、AlmaLinux 8/9、Rocky Linux 9、银河麒麟 V10 SP3 2403。
 - 支持 RPM 和 Ubuntu DEB 仓库。
 - 是否下载依赖由用户选择，默认递归下载依赖包，可在页面关闭。
 - 支持直接粘贴 `.rpm` 或 `.deb` URL。

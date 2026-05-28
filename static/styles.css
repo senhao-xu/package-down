@@ -562,6 +562,10 @@ label {
   background: #4b7f52;
 }
 
+.os-icon-kylin {
+  background: #b42318;
+}
+
 .os-icon-custom {
   background: var(--muted);
 }
